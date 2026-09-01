@@ -1,0 +1,20 @@
+# Core pipeline
+torch>=2.0
+torchvision>=0.15
+numpy>=1.24
+Pillow>=9.0
+gymnasium>=0.29
+opencv-python>=4.5        # Pix2Vox / UMIFormer CenterCrop reproduces cv2.resize exactly
+
+# Required by the vendored UMIFormer modules (backbones/_vendor/umiformer)
+timm>=0.9                 # ViT blocks; 1.x works, see the default_cfgs shim in encoder_vit.py
+einops>=0.6
+# Optional. Needed ONLY to load TripoSR, which is not a registered backbone --
+# see backbones/__init__.py. Required just for `category_bench --all`, which
+# re-tests the decision to drop it. Training and inference do not import it.
+# omegaconf>=2.3        # TripoSR config loading
+# transformers>=4.35    # TripoSR's ViT image tokenizer
+
+# Only needed to rebuild the ModelNet demo dataset (build/make_demo_dataset.py).
+# Not needed for ShapeNet training or inference.
+# trimesh>=3.9

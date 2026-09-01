@@ -1,0 +1,62 @@
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+
+# ── Editors / tooling ─────────────────────────────────────────────────────────
+.vscode/
+.idea/
+.claude/
+.DS_Store
+Thumbs.db
+
+# ── Model weights and checkpoints ─────────────────────────────────────────────
+# Several GB: UMIFormer and UMIFormer+ are 717 MB each, TripoSR 1.7 GB.
+*.pt
+*.pth
+*.ckpt
+*.npy
+*.npz
+
+# ── Archives ──────────────────────────────────────────────────────────────────
+# kaggle_weights.zip alone is 1.46 GB. NOT in the audit's proposed list.
+*.zip
+*.tgz
+*.tar
+*.tar.gz
+
+# ── Datasets ──────────────────────────────────────────────────────────────────
+# NOTE: deliberately NOT a bare `datasets/` rule. That would exclude
+# build/rl_pipeline/datasets/ShapeNet.json, which is the official train/val/test
+# split taxonomy -- required code-adjacent data that ships in the Kaggle bundle.
+build/ShapeNetRendering/
+build/ShapeNetVox32/
+build/dataset_demo/
+build/mesh_raw/
+build/preproc/
+build/pixelnerf_weights/
+build/triposr/
+
+# ── Run outputs ───────────────────────────────────────────────────────────────
+checkpoints/
+logs/
+runs/
+wandb/
+tensorboard/
+outputs/
+
+# ── Utility cache ─────────────────────────────────────────────────────────────
+# (object_id, sorted(view_ids)) -> (U_pix, U_umi, U_umi+). Grows without bound
+# and is reproducible from configs/utility_cache_*.yaml plus the generator, so
+# version the schema and the config, never the cache itself.
+cache/
+utility_cache/
+
+# ── Superseded copies kept on disk but not versioned ──────────────────────────
+# rl_proj_final holds the byte-identical ckpt_final.pt backup (30,595 episodes).
+# Kept as a safety copy; its history is not useful in the repo.
+rl_proj_final - Copy (1)/
+reconstructor (1)/
