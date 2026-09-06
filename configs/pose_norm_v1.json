@@ -1,0 +1,20 @@
+{
+  "schema": "pose_norm_v1",
+  "descriptor": [
+    "sin_azimuth",
+    "cos_azimuth",
+    "sin_elevation",
+    "cos_elevation",
+    "normalised_distance"
+  ],
+  "distance_mean": 0.798355,
+  "distance_std": 0.088042,
+  "split": "train",
+  "n_objects": 100,
+  "n_views_per_object": 10,
+  "rendering_root": "D:\\rl_project\\build\\ShapeNetRendering",
+  "omitted_fields": [
+    "in_plane",
+    "fov"
+  ]
+}

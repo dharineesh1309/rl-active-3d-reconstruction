@@ -58,9 +58,9 @@ def find_rendering_root() -> Path:
     raise SystemExit("Set SHAPENET_ROOT or SHAPENET_RENDERING_ROOT.")
 
 
-def collect(root: Path, limit: int):
+def collect(root: Path, limit: int, allowed=None):
     """Walk synset/model/rendering/rendering_metadata.txt, bounded."""
-    records, fallbacks, n_views_seen = [], [], []
+    records, fallbacks, n_views_seen, n_rows = [], [], [], []
     synsets = sorted(p for p in root.iterdir() if p.is_dir() and p.name.isdigit())
     if not synsets:
         raise SystemExit(f"No synset directories under {root}")
@@ -70,6 +70,8 @@ def collect(root: Path, limit: int):
         for model in sorted(syn.iterdir()):
             if taken >= per_syn:
                 break
+            if allowed is not None and model.name not in allowed:
+                continue
             rend = model / "rendering"
             meta = rend / "rendering_metadata.txt"
             if not meta.is_file():
@@ -77,16 +79,19 @@ def collect(root: Path, limit: int):
             n_views = len(sorted(rend.glob("*.png")))
             if n_views == 0:
                 continue
-            cams = _read_metadata(meta, n_views)
-            # A parse failure returns n_views copies of the default. Flag it.
-            if all(all(abs(c[f] - DEFAULT_CAM[f]) < 1e-12 for f in FIELDS)
-                   for c in cams):
-                fallbacks.append(f"{syn.name}/{model.name}")
+            # Strict: _read_metadata now raises rather than returning zeroed
+            # cameras. The validator is the one caller that wants to survive a
+            # bad object and count it, so it catches instead of aborting.
+            try:
+                cams = _read_metadata(meta, n_views, allow_fallback=False)
+            except RuntimeError as exc:
+                fallbacks.append(f"{syn.name}/{model.name}: {str(exc).splitlines()[0]}")
                 continue
+            n_rows.append(len(cams))
             records.append((syn.name, model.name, cams))
             n_views_seen.append(n_views)
             taken += 1
-    return records, fallbacks, n_views_seen
+    return records, fallbacks, n_views_seen, n_rows
 
 
 def main():
@@ -94,6 +99,14 @@ def main():
     ap.add_argument("--limit", type=int, default=400, help="objects to scan")
     ap.add_argument("--out", default="artifacts/camera_metadata")
     ap.add_argument("--no-figures", action="store_true")
+    ap.add_argument("--split", default="all", choices=["train", "val", "test", "all"],
+                    help="Restrict the scan. Use 'train' when freezing pose "
+                         "normalisation: validation and test must never "
+                         "contribute to those statistics.")
+    ap.add_argument("--taxonomy", default="datasets/ShapeNet.json")
+    ap.add_argument("--freeze-pose-norm",
+                    help="Write the distance mean/std to this config path. "
+                         "Only meaningful with --split train.")
     args = ap.parse_args()
 
     root = find_rendering_root()
@@ -101,7 +114,12 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     print(f"scanning {root}")
 
-    records, fallbacks, n_views_seen = collect(root, args.limit)
+    allowed = None
+    if args.split != "all":
+        tax = json.load(open(args.taxonomy))
+        allowed = {m for c in tax for m in c.get(args.split, [])}
+        print(f"  restricted to '{args.split}' split: {len(allowed)} model ids")
+    records, fallbacks, n_views_seen, n_rows = collect(root, args.limit, allowed)
     if not records:
         raise SystemExit("No objects with readable camera metadata found.")
     n_views = int(np.bincount(n_views_seen).argmax())
@@ -179,8 +197,39 @@ def main():
                     if per_index_az_std > 5.0 else
                     "index appears to be a stable physical viewpoint"),
     }
+    # Distance normalisation, computed on whatever split was scanned. These two
+    # numbers get frozen: validation and test must be normalised with the
+    # TRAINING statistics, never recompute their own, or the policy sees a
+    # different input distribution at evaluation than it trained on.
+    d_mu, d_sd = float(arr["distance"].mean()), float(arr["distance"].std())
+    stats["distance_norm"] = {"split": args.split, "mean": round(d_mu, 6),
+                              "std": round(d_sd, 6), "n_objects": len(records)}
     with open(out / "camera_pose_stats.json", "w") as fh:
         json.dump(stats, fh, indent=2)
+
+    if args.freeze_pose_norm:
+        if args.split != "train":
+            raise SystemExit("--freeze-pose-norm requires --split train")
+        cfg_path = Path(args.freeze_pose_norm)
+        cfg_path.parent.mkdir(parents=True, exist_ok=True)
+        cfg = {
+            "schema": "pose_norm_v1",
+            "descriptor": ["sin_azimuth", "cos_azimuth", "sin_elevation",
+                           "cos_elevation", "normalised_distance"],
+            "distance_mean": round(d_mu, 6),
+            "distance_std": round(d_sd, 6),
+            "split": "train",
+            "n_objects": len(records),
+            "n_views_per_object": n_views,
+            "rendering_root": str(root),
+            "omitted_fields": [f for f in FIELDS if constant[f]],
+        }
+        with open(cfg_path, "w") as fh:
+            json.dump(cfg, fh, indent=2)
+        print()
+        print(f"  froze pose normalisation -> {cfg_path}")
+        print(f"    distance mean {d_mu:.6f}  std {d_sd:.6f}  "
+              f"(train split, {len(records)} objects)")
 
     # ── console summary ──────────────────────────────────────────────────────
     print("\n" + "=" * 70)
@@ -192,6 +241,13 @@ def main():
     print(f"  a shared 24-pose lattice would give 0.0 deg")
     print(f"\n  unique camera sets: {n_unique}/{len(records)} objects "
           f"({dup_rate*100:.0f}% share a pose set with another object)")
+    # Schema checks. These are the ones that must hold on Kaggle before the
+    # pose-conditioned encoder is written against this interface.
+    rows_ok = len(set(n_rows)) <= 1
+    print(f"\n  metadata rows per object: {sorted(set(n_rows))}"
+          f"   {'consistent' if rows_ok else 'INCONSISTENT'}")
+    print(f"  parse failures: {len(fallbacks)}   "
+          f"{'OK' if not fallbacks else 'INVESTIGATE (listed above)'}")
     print(f"\n  VERDICT: {stats['verdict']}")
     print("=" * 70)
 

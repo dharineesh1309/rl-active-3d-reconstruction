@@ -1,0 +1,68 @@
+{
+  "rendering_root": "D:\\rl_project\\build\\ShapeNetRendering",
+  "num_objects": 100,
+  "num_views_per_object": 10,
+  "num_metadata_fallbacks": 0,
+  "num_unique_pose_sets": 66,
+  "pose_set_duplication_rate": 0.34,
+  "mean_per_index_azimuth_std_deg": 102.8855,
+  "fields": {
+    "azimuth": {
+      "min": 0.786816,
+      "max": 359.741576,
+      "std": 103.613428,
+      "constant": false
+    },
+    "elevation": {
+      "min": 25.002138,
+      "max": 29.997687,
+      "std": 1.440166,
+      "constant": false
+    },
+    "in_plane": {
+      "min": 0.0,
+      "max": 0.0,
+      "std": 0.0,
+      "constant": true
+    },
+    "distance": {
+      "min": 0.650352,
+      "max": 0.949987,
+      "std": 0.088042,
+      "constant": false
+    },
+    "fov": {
+      "min": 25.0,
+      "max": 25.0,
+      "std": 0.0,
+      "constant": true
+    }
+  },
+  "in_plane_unique": [
+    0.0
+  ],
+  "fov_unique": [
+    25.0
+  ],
+  "pose_descriptor": {
+    "encoded": [
+      "sin_azimuth",
+      "cos_azimuth",
+      "sin_elevation",
+      "cos_elevation",
+      "normalised_distance"
+    ],
+    "omitted": [
+      "in_plane",
+      "fov"
+    ],
+    "reason": "constant across every view of every object, so it cannot distinguish candidates"
+  },
+  "verdict": "index is NOT a stable physical viewpoint",
+  "distance_norm": {
+    "split": "train",
+    "mean": 0.798355,
+    "std": 0.088042,
+    "n_objects": 100
+  }
+}

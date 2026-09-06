@@ -55,25 +55,49 @@ COVERAGE_RES = 32       # matches CoverageGrid in env/state_builder.py
 VIEW_PROBE_SAMPLES = 32  # models sampled to infer the view count
 
 
-def _read_metadata(path: Path, n_views: int) -> List[dict]:
+def _read_metadata(path: Path, n_views: int,
+                   allow_fallback: bool = False) -> List[dict]:
     """
     Parse rendering_metadata.txt.
 
     Each line is: azimuth elevation in_plane_rotation distance field_of_view
 
-    A missing or malformed file yields zeroed cameras rather than raising — the
-    coverage grid degrades to a flat projection but training still runs, which
-    matches how the ModelNet loader handles absent cameras.
+    **Raises by default.** This used to return zeroed cameras for a missing or
+    malformed file, on the reasoning that the coverage grid would merely degrade
+    to a flat projection while training continued. That trade no longer holds:
+    the pose-conditioned policy scores candidate views *from these numbers*, so a
+    silent fallback would hand it 24 identical candidates and it would learn
+    nothing, with no error anywhere. A crash is now far safer than a default.
+
+    `allow_fallback=True` restores the old behaviour and exists for the
+    validator, which needs to count unreadable objects rather than stop at the
+    first one, and for the legacy RGB-D path.
     """
     default = {"azimuth": 0.0, "elevation": 0.0, "in_plane": 0.0,
                "distance": 1.0, "fov": 25.0}
+
+    def _fail(msg):
+        if allow_fallback:
+            return None
+        raise RuntimeError(
+            f"Camera metadata unusable: {msg}\n  path: {path}\n"
+            "The pose-conditioned policy reads candidate viewpoints from this "
+            "file; a zeroed fallback would make every candidate identical. Pass "
+            "allow_fallback=True only if you genuinely want that."
+        )
+
     try:
         lines = path.read_text().strip().splitlines()
-    except OSError:
-        return [dict(default) for _ in range(n_views)]
+    except OSError as exc:
+        if _fail(f"cannot read ({exc})") is None:
+            return [dict(default) for _ in range(n_views)]
+
+    if len(lines) < n_views:
+        if _fail(f"{len(lines)} rows for {n_views} views") is None:
+            lines = list(lines) + [""] * (n_views - len(lines))
 
     cams = []
-    for line in lines[:n_views]:
+    for i, line in enumerate(lines[:n_views]):
         parts = line.split()
         try:
             cams.append({
@@ -83,8 +107,9 @@ def _read_metadata(path: Path, n_views: int) -> List[dict]:
                 "distance":  float(parts[3]) if len(parts) > 3 else 1.0,
                 "fov":       float(parts[4]) if len(parts) > 4 else 25.0,
             })
-        except (IndexError, ValueError):
-            cams.append(dict(default))
+        except (IndexError, ValueError) as exc:
+            if _fail(f"row {i} malformed ({exc}): {line!r}") is None:
+                cams.append(dict(default))
 
     while len(cams) < n_views:
         cams.append(dict(default))
