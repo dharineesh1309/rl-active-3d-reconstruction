@@ -7,14 +7,25 @@
     "cos_elevation",
     "normalised_distance"
   ],
-  "distance_mean": 0.798355,
-  "distance_std": 0.088042,
+  "distance_mean": 0.796219,
+  "distance_std": 0.085869,
   "split": "train",
-  "n_objects": 100,
-  "n_views_per_object": 10,
-  "rendering_root": "D:\\rl_project\\build\\ShapeNetRendering",
+  "n_objects": 988,
+  "n_views_per_object": 24,
+  "rendering_root": "kaggle: ShapeNet-Pix2Vox/ShapeNetRendering/ShapeNetRendering",
   "omitted_fields": [
     "in_plane",
     "fov"
-  ]
+  ],
+  "provenance": {
+    "generated_on": "kaggle",
+    "generator": "build/rl_pipeline/validate_cameras.py --limit 1000 --split train --freeze-pose-norm",
+    "sampling": "head",
+    "parse_failures": 0,
+    "rows_per_object": 24,
+    "mean_per_index_azimuth_std_deg": 102.5,
+    "in_plane_observed": [0.0],
+    "fov_observed": [25.0],
+    "note": "Transcribed from the validated Kaggle run. These are the TRAINING statistics; validation and test must be normalised with them and must never recompute their own, or the policy meets a different input distribution at evaluation than it trained on."
+  }
 }

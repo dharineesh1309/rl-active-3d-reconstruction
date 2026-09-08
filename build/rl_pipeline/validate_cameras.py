@@ -48,26 +48,60 @@ DEFAULT_CAM = {"azimuth": 0.0, "elevation": 0.0, "in_plane": 0.0,
                "distance": 1.0, "fov": 25.0}
 
 
+def _resolve_root(p: Path, depth: int = 0) -> Path:
+    """
+    Descend through same-named wrappers to the directory holding the synsets.
+
+    Several published mirrors nest the tree inside a directory of the same name
+    (ShapeNetRendering/ShapeNetRendering/<synset>). A caller that stops at the
+    first name match lands on a shell whose only child is another directory, and
+    the scan then finds nothing. Resolving it here means no notebook cell has to
+    get the nesting right.
+    """
+    if depth > 4:
+        return p
+    try:
+        kids = [k for k in p.iterdir() if k.is_dir()]
+    except OSError:
+        return p
+    if kids and all(k.name.isdigit() for k in kids):
+        return p                                   # synsets: this is the root
+    same = [k for k in kids if k.name == p.name]
+    if same:
+        return _resolve_root(same[0], depth + 1)
+    if len(kids) == 1:
+        return _resolve_root(kids[0], depth + 1)
+    return p
+
+
 def find_rendering_root() -> Path:
     for env in ("SHAPENET_RENDERING_ROOT",):
         if os.environ.get(env):
-            return Path(os.environ[env])
+            return _resolve_root(Path(os.environ[env]))
     root = os.environ.get("SHAPENET_ROOT")
     if root:
-        return Path(root) / "ShapeNetRendering"
+        return _resolve_root(Path(root) / "ShapeNetRendering")
     raise SystemExit("Set SHAPENET_ROOT or SHAPENET_RENDERING_ROOT.")
 
 
-def collect(root: Path, limit: int, allowed=None):
+def collect(root: Path, limit: int, allowed=None, sample="head"):
     """Walk synset/model/rendering/rendering_metadata.txt, bounded."""
     records, fallbacks, n_views_seen, n_rows = [], [], [], []
     synsets = sorted(p for p in root.iterdir() if p.is_dir() and p.name.isdigit())
     if not synsets:
         raise SystemExit(f"No synset directories under {root}")
     per_syn = max(1, limit // len(synsets))
+    rng = np.random.default_rng(0)
     for syn in synsets:
         taken = 0
-        for model in sorted(syn.iterdir()):
+        models = sorted(syn.iterdir())
+        if sample == "random":
+            # Contiguous sampling can inflate the pose-set duplication rate: if
+            # the renderer walked directories in order with a per-batch seed,
+            # alphabetically adjacent models would share cameras. Random draws
+            # separate a genuinely small camera pool from that artifact.
+            rng.shuffle(models)
+        for model in models:
             if taken >= per_syn:
                 break
             if allowed is not None and model.name not in allowed:
@@ -104,6 +138,10 @@ def main():
                          "normalisation: validation and test must never "
                          "contribute to those statistics.")
     ap.add_argument("--taxonomy", default="datasets/ShapeNet.json")
+    ap.add_argument("--sample", default="head", choices=["head", "random"],
+                    help="'head' takes the first N models per synset; 'random' "
+                         "draws them spread out. Compare the two to tell a small "
+                         "camera pool from a contiguous-sampling artifact.")
     ap.add_argument("--freeze-pose-norm",
                     help="Write the distance mean/std to this config path. "
                          "Only meaningful with --split train.")
@@ -119,7 +157,7 @@ def main():
         tax = json.load(open(args.taxonomy))
         allowed = {m for c in tax for m in c.get(args.split, [])}
         print(f"  restricted to '{args.split}' split: {len(allowed)} model ids")
-    records, fallbacks, n_views_seen, n_rows = collect(root, args.limit, allowed)
+    records, fallbacks, n_views_seen, n_rows = collect(root, args.limit, allowed, args.sample)
     if not records:
         raise SystemExit("No objects with readable camera metadata found.")
     n_views = int(np.bincount(n_views_seen).argmax())
@@ -177,6 +215,7 @@ def main():
         "num_objects": len(records),
         "num_views_per_object": n_views,
         "num_metadata_fallbacks": len(fallbacks),
+        "sampling": args.sample,
         "num_unique_pose_sets": n_unique,
         "pose_set_duplication_rate": round(dup_rate, 4),
         "mean_per_index_azimuth_std_deg": round(per_index_az_std, 4),
