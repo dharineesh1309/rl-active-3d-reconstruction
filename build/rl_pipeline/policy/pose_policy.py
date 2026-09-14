@@ -53,7 +53,10 @@ N_HEADS = 4
 N_LAYERS = 2
 REL_DIM = 4             # [delta_min, delta_mean, has_selected, n/N_max]
 
-_DEFAULT_NORM = Path(__file__).resolve().parents[2] / "configs" / "pose_norm_v1.json"
+# Inside the package, not at the repo root: only rl_pipeline/ is copied to the
+# training environment, so a config living outside it would simply be absent
+# there and the policy would fall back to statistics it never saw.
+_DEFAULT_NORM = Path(__file__).resolve().parents[1] / "configs" / "pose_norm_v1.json"
 
 
 # ── Pose descriptor ──────────────────────────────────────────────────────────
