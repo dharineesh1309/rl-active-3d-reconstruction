@@ -2,9 +2,13 @@
 __pycache__/
 *.py[cod]
 *.egg-info/
-.venv/
-venv/
-env/
+# Anchored to the repository root. Unanchored, `env/` also matched
+# build/rl_pipeline/env/ and silently excluded the entire environment package --
+# including the RGB-D coverage implementation the baseline commit claimed to
+# preserve for a later ablation.
+/.venv/
+/venv/
+/env/
 
 # ── Editors / tooling ─────────────────────────────────────────────────────────
 .vscode/
