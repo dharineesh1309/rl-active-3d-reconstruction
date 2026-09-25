@@ -29,6 +29,14 @@ selection. The reason was found late and is structural:
 > degrees**, where a shared 24-pose lattice would give 0.0. Elevation and
 > distance also vary per object.
 
+More precisely: the renderer drew from a pool of roughly **110 distinct
+24-camera configurations**, each reused by about 280 train objects. Random
+sampling of 988 objects found 109 distinct sets and saturated the pool -- at 500
+configurations we would have expected 431. So index `i` is not random per
+object, it is one of ~110 directions, which is still unlearnable from an index
+alone because the policy has no way to tell which configuration it is in without
+the pose data.
+
 A policy whose action is an integer index therefore cannot generalise across
 objects, and no amount of credit-assignment work downstream repairs that. The
 rebuild replaces the index action space with pose-conditioned scoring.
@@ -68,6 +76,7 @@ category-budget cells and are unregistered but kept on disk.
 | quantity | value |
 |---|---|
 | mean per-index azimuth std | 102.5 deg (988 objects, 24 views) |
+| distinct camera configurations in the dataset | ~110, each shared by ~280 train objects |
 | `in_plane`, `fov` | constant (0.0, 25.0) -> pose descriptor is 5-D |
 | distance train stats | mean 0.796219, std 0.085869 |
 | view-choice signal (within object) | 0.0266 IoU |
@@ -161,9 +170,10 @@ coupling hypothesis was tested and came back at +0.0010).
 
 ## Open
 
-1. `--sample random` on Kaggle, to tell whether the 86% pose-set duplication is
-   real or an artifact of sampling contiguous models. Affects only how the data
-   is described.
+1. ~~`--sample random` duplication check~~ **DONE.** Random sampling gives 109
+   distinct sets in 988 objects (89% duplication) against 134 (86%) for
+   contiguous sampling -- more duplication, not less, so it was never a sampling
+   artifact. Pool size ~110 configurations.
 2. R2N2's forward pass and pixelNeRF's cameras remain unresolved; both are
    documented as excluded.
 3. `EXPERIMENTS.md` sections 1-17 describe the RGB-D era. They remain accurate
