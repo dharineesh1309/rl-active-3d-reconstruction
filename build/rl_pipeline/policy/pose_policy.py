@@ -271,9 +271,15 @@ class RGBPosePolicy(nn.Module):
         self.value_head = nn.Sequential(
             nn.Linear(D_MODEL, 128), nn.GELU(), nn.Linear(128, 1))
         self.apply(self._init)
+        # Actor output at gain 0.01 so the initial policy is near-uniform;
+        # critic output at 1.0. Leaving the critic at the hidden-layer sqrt(2)
+        # made it predict around +-3 against returns of ~0.75, i.e. a starting
+        # value loss near 10 that it then had to unlearn.
         last = self.scorer.net[-1] if pose_head else self.index_head[-1]
         nn.init.orthogonal_(last.weight, gain=0.01)
         nn.init.zeros_(last.bias)
+        nn.init.orthogonal_(self.value_head[-1].weight, gain=1.0)
+        nn.init.zeros_(self.value_head[-1].bias)
 
     @staticmethod
     def _init(m):
