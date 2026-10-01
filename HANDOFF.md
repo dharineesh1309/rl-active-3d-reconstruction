@@ -198,6 +198,32 @@ Things this run taught:
   test-split objects** written by the evals. Tier 1 must split by object via
   `datasets/ShapeNet.json`, never by row. It also covers one view count only.
 
+### Tier 1 -- router, in progress
+
+`extract_router_feats.py` (Kaggle GPU, once) writes the policy's own ResNet
+features and pose descriptors for every cached object; `train_router.py` then
+trains on CPU. Split by object: test = the 309 Tier 0B eval objects, val/fit =
+the rest. Self-check `training/tests/test_router.py` (mutation-tested: shuffled
+features fail it).
+
+Baselines on the held-out objects, measured from the cache alone:
+
+| method | utility | regret vs per-set oracle |
+|---|---|---|
+| best fixed backbone (umiformer_plus) | 0.7023 | 0.0334 |
+| best backbone per category (uses label) | 0.7065 | 0.0292 (12.4% captured) |
+| oracle per view set | 0.7357 | 0 |
+
+Routing headroom (0.0334) is five times what view selection captured (0.0067).
+
+**Cross-listed ids.** 263 model ids appear under two categories in
+`datasets/ShapeNet.json`, some in train under one and test under another (e.g.
+`4bb41171...` aeroplane-train / watercraft-test). 23 of the 2,290 cached objects
+are among them; 7 sit in both train and test. The utility cache key has no
+synset, so for these ids renders and utilities are ambiguous. The router drops
+them. Left as-is in RL: ~1% of objects, and changing the key would invalidate
+the cache.
+
 Then Tier 1 (supervised router, utility regression with gap-weighted ranking --
 not classification, since 47% of argmax flips cost nearly nothing) and Tier 2
 (STOP as a 25th candidate, justified by acquisition cost; the count/routing
