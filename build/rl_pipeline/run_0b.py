@@ -108,33 +108,58 @@ def build(args):
     return policy, envs, test_ds, envelope, bbs, feats, device
 
 
-def evaluate(policy, test_ds, envelope, feats, budget, n_subsets, device, seed=0):
-    """Policy views vs random vs best-of-N-subsets, on held-out objects."""
+def greedy_views(policy, test_ds, envelope, feats, budget, device, item, i, start):
+    """One greedy episode on `item`, starting from view `start`."""
     from env.rgb_view_env import RGBViewEnv, stack_obs, to_tensor
+    from policy.pose_policy import pose_descriptor
 
+    env = RGBViewEnv(test_ds, envelope, view_budget=budget, features=feats,
+                     device=device, seed_initial_view=True)
+    env.item, env.model_id = item, item.get("model_id", str(i))
+    env.cand_poses = pose_descriptor(item["cams"], env.d_mean, env.d_std)
+    env.selected, env.step_count, env.done = [], 0, False
+    env._acquire(start)
+    env.step_count = 0
+
+    obs = env._obs()
+    while not env.done:
+        with torch.no_grad():
+            a, _, _ = policy.act(to_tensor(stack_obs([obs]), device), greedy=True)
+        obs, r, done, info = env.step(int(a))
+    return list(env.selected)
+
+
+def evaluate(policy, test_ds, envelope, feats, budget, n_subsets, device, seed=0,
+             n_starts=1):
+    """
+    Policy views vs random vs best-of-N-subsets, on held-out objects.
+
+    With n_starts > 1 the policy is also rolled out from extra start views per
+    object and its utility averaged. Those starts come from a separate stream,
+    so the first start and the random subsets are exactly what n_starts=1
+    draws -- and so already in the cache. Random and oracle do not depend on
+    the start view: they are k views drawn at random.
+
+    Per-object values are returned too, so two arms evaluated with the same
+    seed can be compared object by object rather than through their means.
+    """
     rng = np.random.default_rng(seed)
-    pol_u, rnd_u, orc_u = [], [], []
+    extra = np.random.default_rng(seed + 1)
+    pol_u, rnd_u, orc_u, ids, cats = [], [], [], [], []
     policy.eval()
     for i in range(len(test_ds)):
         item = test_ds[i]
         nv = len(item["images"])
-        env = RGBViewEnv(test_ds, envelope, view_budget=budget, features=feats,
-                         device=device, seed_initial_view=True)
-        env.item, env.model_id = item, item.get("model_id", str(i))
-        from policy.pose_policy import pose_descriptor
-        env.cand_poses = pose_descriptor(item["cams"], env.d_mean, env.d_std)
-        env.selected, env.step_count, env.done = [], 0, False
-        seeded = int(rng.integers(nv))
-        env._acquire(seeded)
-        env.step_count = 0
+        first = int(rng.integers(nv))
+        starts = [first] + extra.choice(
+            [v for v in range(nv) if v != first], n_starts - 1, replace=False).tolist()
 
-        obs = env._obs()
-        while not env.done:
-            with torch.no_grad():
-                a, _, _ = policy.act(to_tensor(stack_obs([obs]), device), greedy=True)
-            obs, r, done, info = env.step(int(a))
-        views = list(env.selected)
-        pol_u.append(envelope(item, views))
+        u = []
+        for s in starts:
+            views = greedy_views(policy, test_ds, envelope, feats, budget, device,
+                                 item, i, s)
+            u.append(envelope(item, views))
+        pol_u.append(float(np.mean(u)))
 
         k = len(views)
         subsets = [rng.choice(nv, size=k, replace=False).tolist()
@@ -142,12 +167,18 @@ def evaluate(policy, test_ds, envelope, feats, budget, n_subsets, device, seed=0
         vals = [envelope(item, s) for s in subsets]
         rnd_u.append(float(np.mean(vals)))
         orc_u.append(float(np.max(vals)))
+        ids.append(item.get("model_id", str(i)))
+        cats.append(item.get("category", "?"))
 
     P, R, O = map(float, (np.mean(pol_u), np.mean(rnd_u), np.mean(orc_u)))
     frac = (P - R) / (O - R) if O - R > 1e-9 else float("nan")
+    d = np.array(pol_u) - np.array(rnd_u)
     return {"policy": P, "random": R, "oracle": O,
-            "policy_minus_random": P - R, "headroom": O - R,
-            "fraction_captured": frac}
+            "policy_minus_random": P - R,
+            "policy_minus_random_se": float(d.std(ddof=1) / np.sqrt(len(d))),
+            "headroom": O - R, "fraction_captured": frac,
+            "per_object": {"model_id": ids, "category": cats, "policy": pol_u,
+                           "random": rnd_u, "oracle": orc_u}}
 
 
 def main():
@@ -211,7 +242,8 @@ def main():
             row["eval"] = ev
             print(f"  {trainer.total_steps:>8,} steps | reward "
                   f"{row['reward']:+.4f} | H {metrics['entropy']:.3f} | "
-                  f"policy-random {ev['policy_minus_random']:+.4f} | "
+                  f"policy-random {ev['policy_minus_random']:+.4f} "
+                  f"(se {ev['policy_minus_random_se']:.4f}) | "
                   f"captured {ev['fraction_captured']*100:5.1f}% of "
                   f"{ev['headroom']:.4f}")
             envelope.flush()
