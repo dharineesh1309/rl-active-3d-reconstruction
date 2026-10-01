@@ -279,9 +279,8 @@ class ShapeNetChoyDataset:
             "depths": depths,
             "silhouettes": silhouettes,
             "voxels": voxels,
-            # Per-view camera parameters. Voxel backbones ignore these; pixelNeRF
-            # needs them, since it reasons about 3D points projected into each
-            # input view rather than about images alone.
+            # Per-view camera parameters. The backbones ignore these; the pose
+            # policy builds its view descriptors from them.
             "cams": cams,
             "category": self.category_of[synset],
             "model_id": model_id,
