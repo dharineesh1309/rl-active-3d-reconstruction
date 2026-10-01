@@ -41,8 +41,8 @@ class Config:
     # earlier result used. Those used undocumented units (Pix2Vox-F 0.09,
     # UMIFormers 0.938) with lambda 0.07: a penalty gap of 0.07 * 0.848 =
     # 0.0594 IoU between Pix2Vox-F and the UMIFormers. 0.0771 * 0.77 s gives
-    # the same gap, so every routing decision and every reported difference is
-    # unchanged; absolute utilities are 0.033 lower than in the old units.
+    # the same gap to 1e-5: every cached routing decision is unchanged, and
+    # absolute utilities shift by an approximately uniform -0.033.
     #
     # The operating point is declared, not a unique optimum. It was chosen from
     # the 3-category measurement in EXPERIMENTS.md §10 (airplane,
