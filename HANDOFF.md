@@ -236,6 +236,23 @@ Clean objects: the official test split minus the 312 eval objects (~8,450,
 >=187 per category). The val split was used for the backbones' checkpoint
 selection, so it is not fully clean.
 
+**What clean labels buy** (5-fold CV by object over the 309 unseen eval
+objects, ~247 training objects per fold; share of the 0.0334 gap captured):
+
+| router | captured |
+|---|---|
+| category lookup, true label, table from clean objects | 22.3% |
+| **two-stage: category predicted from the 5 views, then that table** | **18.0%** |
+| category lookup, table from seen objects | 12.4% |
+| neural router (`train_router.py`), clean labels | ~0% |
+| neural router, seen-object labels | 4.7% |
+
+The category classifier is a ridge on 5-view mean ResNet features trained on
+train-split objects -- category labels are not biased by memorisation, so the
+big split is usable for it -- and gets 88.3% on unseen objects. The end-to-end
+neural router does not learn from ~250 clean objects; it needs far more, or
+the two-stage structure.
+
 **Cross-listed ids.** 263 model ids appear under two categories in
 `datasets/ShapeNet.json`, some in train under one and test under another (e.g.
 `4bb41171...` aeroplane-train / watercraft-test). 23 of the 2,290 cached objects
