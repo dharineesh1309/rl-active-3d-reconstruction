@@ -96,6 +96,19 @@ def _sha(text) -> str:
     return "sha256:" + hashlib.sha256(text.encode()).hexdigest()
 
 
+def code_build() -> str:
+    """The commit package_for_kaggle stamped into BUILD.txt, else git, else unknown."""
+    here = Path(__file__).resolve().parent
+    if (here / "BUILD.txt").is_file():
+        return (here / "BUILD.txt").read_text().strip()
+    try:
+        import subprocess
+        return subprocess.run(["git", "describe", "--always", "--dirty"], cwd=here,
+                              capture_output=True, text=True).stdout.strip() or "unknown"
+    except OSError:
+        return "unknown"
+
+
 def build(args):
     from backbones import load_backbones
     from config import Config
@@ -134,13 +147,19 @@ def build(args):
     envelope = UtilityEnvelope(
         bbs, cost_lambda=base.cost_lambda, cache_path=args.cache, checkpoints=ckpts,
         run={"script": "run_0b", "arm": args.arm, "seed": args.seed,
-             "budget": args.budget, "train": "controller_train", "splits": SPLITS},
+             "budget": args.budget, "train": "controller_train", "splits": SPLITS,
+             "code": code_build()},
         verbose=True)
     dev_index = {m: i for i, (_, m) in enumerate(dev_ds.samples)}
-    diff = envelope.verify_legacy(lambda m: dev_ds[dev_index[m]], dev_ids)
-    if diff is not None:
-        print(f"  [utility] legacy labels reproduce with these checkpoints "
-              f"(max |dIoU| {diff:.1e})")
+    checked = envelope.verify_legacy(lambda m: dev_ds[dev_index[m]],
+                                     {m: where[m][0][1] for m in dev_ids})
+    for rid, diff in checked.items():
+        if diff is None:
+            raise SystemExit(f"cache run {rid} has unknown checkpoints and no dev "
+                             "entries to check them by; start from a fresh cache")
+        print(f"  [utility] run {rid}: labels reproduce with these checkpoints "
+              f"(max |dIoU| {diff:.1e}), reused as compatible")
+    envelope.flush()
 
     config = {
         "args": {k: v for k, v in vars(args).items()
@@ -351,10 +370,15 @@ def main():
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     last = out / f"{args.arm}_last.pt"
-    ident = {"arm": args.arm, "budget": args.budget, "config": config}
+    ident = {"arm": args.arm, "budget": args.budget, "config": config,
+             "code": code_build()}
+    print(f"code {ident['code']}")
     best, next_eval, elapsed0 = [], 0, 0.0      # best: [score, steps, file]
     if args.resume:
         st = restore_state(args.resume, trainer, envs, config, out)
+        if st.get("code") != ident["code"]:
+            print(f"  NOTE: code changed since the checkpoint "
+                  f"({st.get('code')} -> {ident['code']})")
         best, next_eval, elapsed0 = st["best"], st["next_eval"], st["elapsed_h"]
         print(f"resumed from {args.resume} at {trainer.total_steps:,} steps")
 
