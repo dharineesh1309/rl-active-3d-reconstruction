@@ -37,13 +37,6 @@ WEIGHTS = [
     "UMIFormerPlus-ShapeNet.pth",
 ]
 
-# OccNet and TripoSR are deliberately NOT shipped. Consequence worth knowing:
-# `category_bench --all` re-tests the decision to drop them, and without their
-# weights that test cannot run on Kaggle -- so the registry stands on the
-# 3-category measurement in EXPERIMENTS.md §10 (both won zero of twelve
-# category-budget cells). To reopen it, add "onet_img2mesh_3-f786b04a.pt"
-# (161 MB) and/or the triposr/ directory (1.7 GB) back to WEIGHTS.
-
 
 def zip_code(out: Path):
     n = 0
