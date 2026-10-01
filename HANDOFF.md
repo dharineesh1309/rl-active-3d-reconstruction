@@ -65,7 +65,8 @@ routing mistake a learning head happens to make.
 
 **Three backbones**, each of which measurably wins somewhere: `pix2vox_f`,
 `umiformer`, `umiformer_plus`. `occnet` and `triposr` won zero of twelve
-category-budget cells and are unregistered but kept on disk.
+category-budget cells; they, `pix2vox_a`, `r2n2` and `pixelnerf` have been
+removed (code and weights). Why each was dropped: README "Backbones".
 
 **lambda = 0.07**, derived by measurement, not chosen.
 
@@ -297,7 +298,6 @@ coupling hypothesis was tested and came back at +0.0010).
    distinct sets in 988 objects (89% duplication) against 134 (86%) for
    contiguous sampling -- more duplication, not less, so it was never a sampling
    artifact. Pool size ~110 configurations.
-2. R2N2's forward pass and pixelNeRF's cameras remain unresolved; both are
-   documented as excluded.
+2. ~~R2N2's forward pass and pixelNeRF's cameras~~ moot: both removed.
 3. `EXPERIMENTS.md` sections 1-17 describe the RGB-D era. They remain accurate
    as history but do not describe the current architecture.
