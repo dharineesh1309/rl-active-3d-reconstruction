@@ -143,31 +143,14 @@ def resolve_inputs() -> dict:
                                          "UMIFormer+-ShapeNet.pth",
                                          "UMIFormer-Plus-ShapeNet.pth"),
     }
-    # Not in the action space (see backbones/__init__.py) and not shipped by
-    # package_for_kaggle. Still looked for, because if someone does attach them
-    # `category_bench --all` can re-test the decision to drop them. Absence is
-    # the expected case and is not a problem.
-    optional = {
-        "OCCNET_CKPT": find_file("onet_img2mesh*.pt"),
-    }
     if (weights["UMIFORMER_CKPT"] and weights["UMIFORMER_PLUS_CKPT"]
             and weights["UMIFORMER_CKPT"] == weights["UMIFORMER_PLUS_CKPT"]):
         raise SystemExit("UMIFormer and UMIFormer+ resolved to the same file; "
                          "rename one so the two are distinguishable.")
 
-    # TripoSR is a directory (model.ckpt + config.yaml), not a single file.
-    for cand, _ in _walk(INPUT):
-        if (cand.is_dir() and (cand / "model.ckpt").is_file()
-                and (cand / "config.yaml").is_file()):
-            optional["TRIPOSR_DIR"] = cand
-            break
-
     print("\nregistered backbones (all three are required):")
     for var, path in weights.items():
         print(f"  {var:<22} {path if path else '*** NOT FOUND ***'}")
-    print("\nnot in the action space (absence is expected):")
-    for var, path in optional.items():
-        print(f"  {var:<22} {path if path else 'not attached'}")
 
     # Every registered backbone must be present. A missing one is skipped with
     # only a notice by load_backbones(), so without this check training would
@@ -185,7 +168,7 @@ def resolve_inputs() -> dict:
     env = os.environ.copy()
     env["SHAPENET_RENDERING_ROOT"] = str(rendering)
     env["SHAPENET_VOXEL_ROOT"] = str(voxels)
-    for var, path in list(weights.items()) + list(optional.items()):
+    for var, path in weights.items():
         if path:
             env[var] = str(path)
     return env
