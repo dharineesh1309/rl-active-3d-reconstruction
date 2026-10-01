@@ -9,9 +9,14 @@ saved result afterwards.
     ... --gt <ShapeNetVox32/<synset>/<model_id>/model.binvox>
 
 1. Start from one view (--start), as in training.
-2. The view policy picks --budget more, greedily, from images and poses.
+2. The view policy picks its trained budget of further views, greedily, from
+   images and poses. The budget comes from the checkpoint, not the command
+   line: the policy and the router were both trained on that view count.
 3. The router picks a backbone from the acquired views' image features.
 4. Only that backbone is loaded and run.
+
+Timing reports model loading separately, then one warm pass per stage (feature
+cache cleared), so selection overhead and reconstruction are like for like.
 """
 
 import argparse
@@ -25,19 +30,6 @@ import torch
 from PIL import Image
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
-
-class _One:
-    """The single-object dataset RGBViewEnv needs."""
-
-    def __init__(self, item):
-        self.item, self.n_views = item, len(item["images"])
-
-    def __len__(self):
-        return 1
-
-    def __getitem__(self, i):
-        return self.item
 
 
 def load_object(obj_dir, n_views):
@@ -66,12 +58,16 @@ def pick_backbone(router, feats):
     return str(router["backbones"][m])
 
 
+def sync():
+    if torch.cuda.is_available():
+        torch.cuda.synchronize()
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--object-dir", required=True)
     ap.add_argument("--policy", required=True)
     ap.add_argument("--router", default="artifacts/router/router.npz")
-    ap.add_argument("--budget", type=int, default=4)
     ap.add_argument("--start", type=int, default=0)
     ap.add_argument("--n-views", type=int, default=24)
     ap.add_argument("--out", default="recon.npy")
@@ -85,32 +81,55 @@ def main():
     from run_0b import ARMS, greedy_views
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    item = load_object(args.object_dir, args.n_views)
-    t0 = time.time()
-
+    t = time.time()
     ck = torch.load(args.policy, map_location=device, weights_only=False)
+    budget = ck.get("budget", 4)           # Tier 0B checkpoints predate the key
+    router = np.load(args.router)
+    set_size = int(router["set_size"]) if "set_size" in router else budget + 1
+    if set_size != budget + 1:
+        raise SystemExit(f"router trained on {set_size}-view sets, policy acquires "
+                         f"{budget + 1}")
+    if not 0 <= args.start < args.n_views or args.n_views < budget + 1:
+        raise SystemExit(f"need 0 <= start < n_views and n_views >= {budget + 1}")
+
+    item = load_object(args.object_dir, args.n_views)
     policy = RGBPosePolicy(n_candidates=args.n_views, **ARMS[ck["arm"]]).to(device)
     policy.load_state_dict(ck["policy"])
     feats = ResNetFeatures(device=device)
+    sync()
+    t_load_ctrl = time.time() - t
+
     no_reward = lambda item, views: 0.0          # nothing here may see GT
-    views = greedy_views(policy, _One(item), no_reward, feats, args.budget,
-                         device, item, 0, args.start)
-    t_views = time.time() - t0
+    timings = []
+    for _ in range(2):                           # cold, then warm
+        feats._cache.clear()
+        t0 = time.time()
+        views = greedy_views(policy, no_reward, feats, budget, device, item, args.start)
+        sync()
+        t1 = time.time()
+        F = np.stack([feats(item["images"][v], key=(item["model_id"], v)) for v in views])
+        name = pick_backbone(router, F)
+        timings.append((t1 - t0, time.time() - t1))
 
-    router = np.load(args.router)
-    F = np.stack([feats(item["images"][v], key=(item["model_id"], v)) for v in views])
-    name = pick_backbone(router, F)
-    t_route = time.time() - t0 - t_views
-
+    t = time.time()
     backbone = {c.name: c for c in _candidates()}[name](Config(), device=device)
-    t1 = time.time()
-    pred = backbone.predict([item["images"][v] for v in views],
-                            [item["cams"][v] for v in views])
-    t_recon = time.time() - t1
+    sync()
+    t_load_bb = time.time() - t
+    imgs, cams = [item["images"][v] for v in views], [item["cams"][v] for v in views]
+    recon = []
+    for _ in range(2):
+        t = time.time()
+        pred = backbone.predict(imgs, cams)
+        sync()
+        recon.append(time.time() - t)
     np.save(args.out, pred)
-    print(f"views {views} -> {name}; saved {args.out} {pred.shape}\n"
-          f"time: views {t_views:.2f}s (policy + ResNet), router {t_route:.3f}s, "
-          f"{name} {t_recon:.2f}s")
+
+    (sel, route), rec = timings[1], recon[1]
+    print(f"views {views} -> {name}; saved {args.out} {pred.shape}")
+    print(f"loading: policy + ResNet {t_load_ctrl:.2f}s, {name} {t_load_bb:.2f}s")
+    print(f"warm, per object ({device}): view selection {sel:.3f}s "
+          f"(policy + ResNet), router {route*1e3:.1f}ms, {name} {rec:.3f}s, "
+          f"total {sel + route + rec:.3f}s")
 
     if args.gt:
         from backbones import voxel_iou
