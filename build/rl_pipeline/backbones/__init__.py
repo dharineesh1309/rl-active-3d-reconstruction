@@ -11,8 +11,8 @@ alike and the policy's model head just picks an index into `load_backbones()`:
 `images` is the list of PIL Images the agent selected this episode. Each backbone
 applies its own input transform, because they were trained with different input
 sizes and normalisation — that conversion is the backbone's business, not the
-environment's. `cams` carries per-view camera parameters for backbones that need
-pose (pixelNeRF); the voxel backbones ignore it.
+environment's. `cams` carries per-view camera parameters; all three registered
+backbones ignore it.
 
 Everything is scored at 32**3, which is the native resolution of the Choy et al.
 2016 ShapeNetVox32 ground truth. Backbones that predict at other resolutions
@@ -61,18 +61,8 @@ def voxel_iou(pred_probs: np.ndarray, gt: np.ndarray,
     return float(np.logical_and(pred, truth).sum() / union)
 
 
-def _candidates(include_unregistered: bool = False):
-    """
-    Registered backbone classes, in the order that defines action indices.
-
-    `include_unregistered` appends the ones dropped from the action space but
-    kept on disk (OccNet, TripoSR). Benchmarking needs them -- the case for
-    dropping them rests on a 3-category measurement, and re-testing that on all
-    13 is pointless if they cannot be loaded -- but training must never see
-    them, or the model head grows two actions it can never profitably take. So
-    they are available to `backbones.bench` and `category_bench` and to nothing
-    else, and they go last so registered indices are unaffected either way.
-    """
+def _candidates():
+    """Registered backbone classes, in the order that defines action indices."""
     from .pix2vox_f import Pix2VoxF
     from .umiformer import UMIFormer
     from .umiformer_plus import UMIFormerPlus
@@ -95,34 +85,16 @@ def _candidates(include_unregistered: bool = False):
     # reward parameter was tuned until it did. Measured on airplane, car and
     # chair, the crossover lands between 3 and 5 views in all three.
     #
-    # Dropped after measurement (backbones/category_bench.py, 12 category-budget
-    # cells over 3 categories): **occnet** and **triposr** won zero cells.
-    # OccNet means 0.271 and TripoSR 0.153 against UMIFormer's 0.800. OccNet was
-    # retained on the theory that it would do better on complex shapes and worse
-    # on simple ones; it is instead uniformly second-to-last. TripoSR is
-    # single-view by construction, so it is flat across budgets and cannot
-    # benefit from the view planning this whole project is about. Both modules
-    # are kept on disk, with their calibrations, in case the 13-category sweep
-    # overturns this -- they are simply not registered.
-    #
-    # Also excluded, for different reasons (see each module's docstring):
-    # pix2vox_a (dominated by UMIFormer at every budget), r2n2 (port does not
-    # reproduce, scores 0.03), pixelnerf (camera convention unresolved).
+    # Measured and dropped (EXPERIMENTS.md section 10, README "Backbones"):
+    # OccNet and TripoSR won zero of twelve category-budget cells, Pix2Vox-A is
+    # dominated by UMIFormer at every budget, the 3D-R2N2 port did not
+    # reproduce, and pixelNeRF's camera convention was never resolved. Their
+    # code and weights have been removed.
     #
     # Order defines the model head's action indices, so append, never insert.
     # This list changed on 2026-09-23 (five entries to three), which invalidates
     # any model head trained before that date -- including ckpt_final.pt.
-    registered = [Pix2VoxF, UMIFormer, UMIFormerPlus]
-    if not include_unregistered:
-        return registered
-
-    # Imported only on request. TripoSR pulls omegaconf and transformers when
-    # built, and neither it nor OccNet is needed for training, so a deployment
-    # that ships only the three registered checkpoints should never have to
-    # satisfy their dependencies to start.
-    from .occnet import OccNet
-    from .triposr import TripoSR
-    return registered + [OccNet, TripoSR]
+    return [Pix2VoxF, UMIFormer, UMIFormerPlus]
 
 
 def available_backbone_names(cfg) -> list:
@@ -136,7 +108,7 @@ def available_backbone_names(cfg) -> list:
     return [c.name for c in _candidates() if c.available(cfg)]
 
 
-def load_backbones(cfg, device: str = "cpu", include_unregistered: bool = False) -> list:
+def load_backbones(cfg, device: str = "cpu") -> list:
     """
     Instantiate every backbone whose weights are on disk.
 
@@ -148,7 +120,7 @@ def load_backbones(cfg, device: str = "cpu", include_unregistered: bool = False)
     raising, so the pipeline runs with whatever is actually available.
     """
     loaded = []
-    for cls in _candidates(include_unregistered):
+    for cls in _candidates():
         if not cls.available(cfg):
             print(f"[backbones] {cls.name}: weights not found, skipping")
             continue
