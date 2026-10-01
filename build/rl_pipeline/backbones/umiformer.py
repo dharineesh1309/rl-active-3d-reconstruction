@@ -44,7 +44,7 @@ class UMIFormer(Backbone):
     """Pretrained UMIFormer. Transformer multi-view voxel reconstruction."""
 
     name = "umiformer"
-    cost = 0.938    # measured 1.28s / 5 views (CPU): 3.71x occnet
+    cost = 0.938    # measured 1.28s / 5 views (CPU)
 
     @staticmethod
     def _ckpt_path(cfg) -> str:
