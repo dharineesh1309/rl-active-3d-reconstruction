@@ -216,6 +216,26 @@ Baselines on the held-out objects, measured from the cache alone:
 
 Routing headroom (0.0334) is five times what view selection captured (0.0067).
 
+**The backbones memorised the train split, unevenly.** All three were trained
+on the official train split, which is where every RL training episode -- and
+so every router label from training -- comes from:
+
+| cached rows | pix2vox_f IoU | umiformer IoU | umiformer_plus IoU |
+|---|---|---|---|
+| train-split objects (42,154) | 0.709 | 0.845 | 0.865 |
+| test-split objects (13,842) | 0.673 | 0.762 | 0.768 |
+
+UMIFormer/UMIFormer+ lose 0.08-0.10 on unseen objects, Pix2Vox-F 0.04. Who wins
+shifts with it: umiformer_plus wins 60-84% of rows on seen objects in most
+categories, 36-53% on unseen ones, and on chairs plain umiformer overtakes it.
+Router labels from train objects are biased toward umiformer_plus; the first
+router, trained on them, captured 4.7% of the gap on held-out objects (below
+the category lookup's 12.4%) and peaked at epoch 0. Training RL there also
+inflates the reward (Tier 0B train ~0.80 vs held-out random 0.735).
+Clean objects: the official test split minus the 312 eval objects (~8,450,
+>=187 per category). The val split was used for the backbones' checkpoint
+selection, so it is not fully clean.
+
 **Cross-listed ids.** 263 model ids appear under two categories in
 `datasets/ShapeNet.json`, some in train under one and test under another (e.g.
 `4bb41171...` aeroplane-train / watercraft-test). 23 of the 2,290 cached objects
