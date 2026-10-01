@@ -28,8 +28,9 @@ records what produced each label, and refuses to mix incompatible ones:
 
 `kind` is what generated the view set -- "train", "eval_policy", "eval_random",
 or "unknown" for converted legacy entries -- and `ref` the policy step or
-checkpoint. Legacy labels keep "unknown" checkpoints until verify_legacy()
-recomputes a sample of them with the live checkpoints and they match.
+checkpoint. Converted legacy runs keep an "unknown" producer for good; before
+their labels are reused, verify_legacy() recomputes a category-spread sample
+with the live checkpoints and records the run as "compatible_with" them.
 
 Thresholds are frozen per backbone before any of this runs. Left free, a router
 would be learning "which reconstructor plus threshold is best" rather than
@@ -204,42 +205,62 @@ class UtilityEnvelope:
 
     # ── provenance ───────────────────────────────────────────────────────────
 
-    def verify_legacy(self, get_item, ids, n: int = 24, tol: float = 1e-3):
+    def verify_legacy(self, get_item, category_of: dict, n: int = 26,
+                      tol: float = 1e-3) -> dict:
         """
-        Recompute up to `n` entries from runs with unknown checkpoints -- one per
-        object, objects in `ids` -- with the live backbones. If every IoU agrees
-        within `tol`, those runs are recorded as produced by these checkpoints;
-        otherwise raise, because the labels cannot be mixed. Returns the max
-        difference, or None if there was nothing to check.
+        Check that labels from runs whose checkpoints are unknown reproduce with
+        the live ones, so they can be reused.
+
+        Each such run is checked on its own: up to `n` of its entries, one per
+        object, objects from `category_of` (model id -> category) taken
+        round-robin across categories. A match is recorded as a
+        "compatible_with" entry -- checkpoint hashes, keys, tolerance, max
+        difference -- and the run's producer stays "unknown": a matching sample
+        supports reusing the labels, it does not establish which weights made
+        them. A mismatch raises.
+
+        Returns {run_id: max |dIoU|, or None if the run had no checkable entry}
+        for every run not already compatible with these checkpoints.
         """
         meta = self.cache["meta"]
-        unknown = {rid for rid, r in meta["runs"].items()
-                   if rid != self.run_id and not _known(r.get("checkpoints"))}
-        if not unknown or not _known(self.checkpoints):
-            return None
-        keys, seen = [], set()
+        if not _known(self.checkpoints):
+            return {}
+        todo = {rid: {} for rid, r in meta["runs"].items()
+                if rid != self.run_id and not _known(r.get("checkpoints"))
+                and not any(c["checkpoints"] == self.checkpoints
+                            for c in r.get("compatible_with", []))}
+        seen = set()
         for k, (rid, _, _) in self.cache["src"].items():
             mid = k.split("|")[0]
-            if rid in unknown and mid in ids and mid not in seen:
-                keys.append(k)
-                seen.add(mid)
-                if len(keys) == n:
-                    break
-        if not keys:
-            return None
-        diff = 0.0
-        for k in keys:
-            mid, v = k.split("|")
-            fresh = self._predict_ious(get_item(mid), [int(x) for x in v.split(",")])
-            diff = max(diff, max(abs(fresh[b] - self.cache["iou"][k][b]) for b in fresh))
-        if diff > tol:
-            raise ValueError(f"legacy labels do not reproduce with these checkpoints: "
-                             f"max |dIoU| {diff:.2e} over {len(keys)} entries")
-        for rid in unknown:
-            meta["runs"][rid]["checkpoints"] = self.checkpoints
-            meta["runs"][rid]["verified_by_recompute"] = {"entries": len(keys),
-                                                          "max_abs_diff": diff}
-        return diff
+            if rid in todo and mid in category_of and (rid, mid) not in seen:
+                seen.add((rid, mid))
+                todo[rid].setdefault(category_of[mid], []).append(k)
+
+        out = {}
+        for rid, groups in todo.items():
+            lists = [groups[c] for c in sorted(groups)]
+            keys = [l[i] for i in range(max(map(len, lists), default=0))
+                    for l in lists if i < len(l)][:n]
+            if not keys:
+                out[rid] = None
+                continue
+            diff = 0.0
+            for k in keys:
+                mid, v = k.split("|")
+                fresh = self._predict_ious(get_item(mid), [int(x) for x in v.split(",")])
+                diff = max(diff, max(abs(fresh[b] - self.cache["iou"][k][b])
+                                     for b in fresh))
+            if diff > tol:
+                raise ValueError(f"run {rid}: labels do not reproduce with these "
+                                 f"checkpoints (max |dIoU| {diff:.2e}, {len(keys)} "
+                                 "entries). Do not reuse them.")
+            meta["runs"][rid].setdefault("compatible_with", []).append({
+                "checkpoints": self.checkpoints, "checked_by": self.run_id,
+                "keys": keys, "categories": sorted(category_of[k.split('|')[0]]
+                                                   for k in keys),
+                "tol": tol, "max_abs_diff": diff})
+            out[rid] = diff
+        return out
 
     # ── persistence ──────────────────────────────────────────────────────────
 
