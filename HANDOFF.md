@@ -1,7 +1,7 @@
 # Handoff
 
-Written for whoever picks this up next, including a fresh assistant session with
-no memory of the work. Everything below is measured unless marked otherwise.
+Written for whoever picks this up next, with no memory of the work.
+Everything below is measured unless marked otherwise.
 
 Repo: `D:\rl_project`, git initialised.
 Working branch: **`tier0-rgb-pose-policy`**. `master` holds the pre-rebuild
