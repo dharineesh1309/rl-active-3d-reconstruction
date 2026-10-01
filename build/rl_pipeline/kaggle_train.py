@@ -70,7 +70,9 @@ def _walk(root: Path, depth: int = 0):
         return
     for p in entries:
         yield p, depth
-        if p.is_dir():
+        # Never into a synset (all-digit) directory: below it lie ~43k model
+        # folders and a million renderings, and nothing this walk looks for.
+        if p.is_dir() and not p.name.isdigit():
             yield from _walk(p, depth + 1)
 
 
@@ -205,12 +207,8 @@ def stage_previous_checkpoint(ckpt_dir: Path) -> bool:
     return False
 
 
-def main():
-    print("=" * 66)
-    print("  Kaggle training driver")
-    print("=" * 66)
-
-    # ── Dependencies Kaggle does not ship by default ─────────────────────────
+def ensure_dependencies():
+    """Install what Kaggle does not ship by default."""
     for module, package in (("gymnasium", "gymnasium"), ("einops", "einops"),
                             ("timm", "timm"), ("cv2", "opencv-python")):
         try:
@@ -220,6 +218,27 @@ def main():
             subprocess.run([sys.executable, "-m", "pip", "install", "-q", package],
                            check=True)
 
+
+def preflight(require_cuda: bool = True):
+    """Dependencies, the GPU, and the ResNet-50 weights the policy reads
+    images with -- all checked before anything long starts."""
+    ensure_dependencies()
+    import torch
+    if require_cuda and not torch.cuda.is_available():
+        raise SystemExit("No GPU. Enable one under Settings > Accelerator.")
+    print(f"torch {torch.__version__}  cuda={torch.cuda.is_available()}"
+          + (f"  ({torch.cuda.get_device_name(0)})" if torch.cuda.is_available() else ""))
+    from env.rgb_view_env import ResNetFeatures
+    ResNetFeatures(device="cuda" if torch.cuda.is_available() else "cpu")
+    print("ResNet-50 weights: loaded")
+
+
+def main():
+    print("=" * 66)
+    print("  Kaggle training driver")
+    print("=" * 66)
+
+    ensure_dependencies()
     import torch
     print(f"\ntorch {torch.__version__}  cuda={torch.cuda.is_available()}"
           + (f"  ({torch.cuda.get_device_name(0)})" if torch.cuda.is_available() else ""))
