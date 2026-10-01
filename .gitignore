@@ -58,6 +58,7 @@ outputs/
 # version the schema and the config, never the cache itself.
 cache/
 utility_cache/
+router_dataset.json
 
 # ── Superseded copies kept on disk but not versioned ──────────────────────────
 # rl_proj_final holds the byte-identical ckpt_final.pt backup (30,595 episodes).
