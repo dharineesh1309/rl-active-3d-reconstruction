@@ -19,6 +19,62 @@ and listed multi-backbone selection as future work.
 
 ---
 
+## Current plan (agreed 2026-10-01) -- read this first
+
+Fixed five-view system: policy picks 4 views after 1 random start, a two-stage
+router picks the backbone. STOP is an optional extension, gated on a pilot.
+
+| order | work | status |
+|---|---|---|
+| 0 | freeze splits, cache v2, cost definition, router code, resume, RGB inference | **done** |
+| 1 | retrain `set_pose` on `controller_train` (Kaggle), select checkpoints on dev | next |
+| 2 | router from that run's cache; top up thin categories | |
+| 3 | dev evaluation matrix + latency + lambda sensitivity | |
+| 4 | STOP pilot (optional) | |
+| 5 | freeze, run `final_test` once, rewrite report | |
+
+**Protocol** (`build/rl_pipeline/configs/splits_v1.json`, built by `splits.py`,
+refuses to overwrite). The official split only says what the reconstructors
+trained on. Controller splits are carved from the official TEST split:
+
+| split | objects | use |
+|---|---|---|
+| `dev` | 309 | development and model selection -- every result so far |
+| `final_test` | 312 (24/cat) | once, at the end. Excludes the first 60 test ids per category (all calibration/bench scripts drew from that prefix) and the 248 local benchmark objects |
+| `controller_train` | 8,052 (>=163/cat) | policy and router training |
+| `classifier_train` | official train | image -> category only |
+
+263 cross-listed ids are excluded everywhere.
+
+**Cost v1** (`config.py`): `backbone.cost` = CPU seconds per 5-view prediction
+(Pix2Vox-F 0.51, UMIFormer/UMIFormer+ 1.28); `cost_lambda` = 0.0771 IoU/s,
+chosen to keep the earlier operating point exactly (penalty gap 0.0594). All
+56,592 cached decisions are unchanged; absolute utilities are 0.033 lower than
+in older tables (differences are not). Controller overhead is not priced and
+must be reported: on CPU, policy + ResNet took 1.66 s (with model loading)
+against Pix2Vox-F's 0.45 s in one `infer_rgb.py` run.
+
+**Cache v2** (`training/utility_envelope.py`): raw IoU per backbone, so lambda
+and costs apply at read time; records thresholds, checkpoint identities and the
+run that produced each entry; refuses mismatched labels; backbone calls run in
+a forked, reseeded RNG. `cache/utility_cache.json` is the converted Tier 0B
+cache (run `legacy`, IoU derived as utility + 0.07 * old cost; original kept as
+`cache/utility_cache_legacy.json`).
+
+**Router** (`train_router.py`): two-stage, reproduced from committed code by
+5-fold CV on dev (`artifacts/router/router_report_cv5.json`): category
+accuracy 88.3%; argmax 18.0% of the routing gap; **expected (category
+probabilities) 19.8%, +0.0066 vs best single backbone, 95% CI [+0.0037,
++0.0095]**; true-label reference 22.3%.
+
+**Scripts**: `run_0b.py` (trains on controller_train, evaluates on dev, keeps
+the 3 best checkpoints + full-state `<arm>_last.pt`, `--resume`), `eval_0b.py`
+(paired dev comparison of any checkpoints; `--split final_test` once),
+`infer_rgb.py` (images + poses -> views -> router -> one backbone; GT only via
+optional `--gt` scoring), `extract_router_feats.py`, `train_router.py`.
+
+---
+
 ## Status: mid-rebuild
 
 Four training runs were completed on the original architecture. None learned view
