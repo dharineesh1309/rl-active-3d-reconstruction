@@ -56,6 +56,13 @@ priced and must be reported. One `infer_rgb.py` run on CPU, warm, loading
 excluded: view selection (policy + ResNet) 0.43 s, router 1.5 ms, Pix2Vox-F
 0.53 s. Loading was 1.5 s (policy + ResNet) and 1.8 s (Pix2Vox-F).
 
+**Reporting rule that follows.** At 0.0771 per CPU-second, that 0.43 s of
+selection is worth 0.033 utility -- more than the whole projected
+view + routing gain (~0.013). One CPU example proves nothing about the system,
+but it means the primary metric must be named **backbone-only utility**, and
+Phase 3 must also report total latency and utility *including* controller
+overhead, on the declared CPU and on GPU.
+
 **Cache v2** (`training/utility_envelope.py`): raw IoU per backbone, so lambda
 and costs apply at read time; records the scoring version, thresholds, and per
 run the SHA-256 of each checkpoint (file name and size are not enough: the two
@@ -63,9 +70,12 @@ UMIFormer files have identical sizes); each entry records its run, kind
 (train / eval_policy / eval_random) and policy step or checkpoint; refuses
 mismatched labels; backbone calls run in a forked, reseeded RNG.
 `cache/utility_cache.json` is the converted Tier 0B cache: run `legacy`, IoU
-derived as utility + 0.07 * old cost, checkpoints "unknown" until
-`verify_legacy()` reproduces a sample of its labels (run_0b does this on dev
-objects before training). Original kept as `cache/utility_cache_legacy.json`.
+derived as utility + 0.07 * old cost. Its producer stays "unknown" for good.
+Before reuse, run_0b calls `verify_legacy()`: per unknown-producer run, 26
+entries spread across categories (the first 24 in file order were all
+aeroplanes) are recomputed with the live checkpoints; a match is recorded as
+`compatible_with` (hashes, keys, tolerance, max difference), a mismatch or an
+uncheckable run stops the job. Original kept as `cache/utility_cache_legacy.json`.
 
 **Router** (`train_router.py`): two-stage, reproduced from committed code by
 5-fold CV on dev (`artifacts/router/router_report_cv5.json`): category
