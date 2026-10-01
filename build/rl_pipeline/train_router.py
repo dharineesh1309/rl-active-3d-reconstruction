@@ -168,6 +168,8 @@ def main():
     ap.add_argument("--out", default="artifacts/router")
     ap.add_argument("--cv-dev", type=int, default=0,
                     help="K: build the table by K-fold CV over dev objects")
+    ap.add_argument("--min-objects", type=int, default=60,
+                    help="flag categories with fewer clean table objects")
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
 
@@ -216,6 +218,10 @@ def main():
     else:
         tr = np.flatnonzero(is_ctrl[obj])
         assert len(tr), "no controller_train rows in the cache yet; use --cv-dev"
+        cover = {c: len(set(obj[tr][cats[obj[tr]] == c])) for c in classes}
+        print("table objects per category: " + ", ".join(
+            f"{c} {n}" + (" (THIN: top up)" if n < args.min_objects else "")
+            for c, n in cover.items()))
         single = np.array([object_mean(U[tr, k], obj[tr]) for k in range(len(names))])
         table = fit_table(U[tr], obj[tr], cats[obj[tr]], classes, single)
         picks["single"][:] = single.argmax()
@@ -235,7 +241,8 @@ def main():
     tag = f"cv{args.cv_dev}" if args.cv_dev else "ctrl"
     report = {"table_source": table_src, "variant": chosen, "temperature": T,
               "category_accuracy": acc, "backbones": names, "dev": res,
-              "folds": fold_ids, "alpha": ALPHA, "seed": args.seed}
+              "folds": fold_ids, "coverage": None if args.cv_dev else cover,
+              "alpha": ALPHA, "seed": args.seed}
     (out / f"router_report_{tag}.json").write_text(json.dumps(report, indent=1))
     if not args.cv_dev:
         np.savez(out / "router.npz", classes=classes, backbones=np.array(names),
