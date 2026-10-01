@@ -32,10 +32,9 @@ class UMIFormerPlus(UMIFormer):
     """Pretrained UMIFormer+. Better with many views, worse with few."""
 
     name = "umiformer_plus"
-    # Same architecture as UMIFormer, so the same compute. Confirm with a
-    # measurement before relying on it; the value below is UMIFormer's measured
-    # 1.28 s / 5 views, normalised.
-    cost = 0.938
+    # Same architecture as UMIFormer, so the same compute: UMIFormer's measured
+    # 1.28 s per 5-view prediction (config.py, cost v1).
+    cost = 1.28
 
     @staticmethod
     def _ckpt_path(cfg) -> str:
