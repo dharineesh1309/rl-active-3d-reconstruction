@@ -104,9 +104,7 @@ category-budget cells (means 0.271 and 0.153 against UMIFormer's 0.800). OccNet
 was kept on the theory that it would do better on complex shapes and worse on
 simple ones; it is instead uniformly second-to-last. TripoSR is single-view by
 construction, so it is flat across budgets and cannot benefit from view planning
-at all. Both modules remain on disk with their calibrations —
-`load_backbones(..., include_unregistered=True)`, or `category_bench --all` —
-so the decision can be re-tested on all 13 categories. Training never sees them.
+at all. Their code and weights have been removed from the project.
 
 This costs the original "three families" framing (voxel / NeRF / implicit): the
 NeRF and implicit members were the two that could not compete on this data.
@@ -120,27 +118,22 @@ crashing, so the pipeline runs with whatever is present.
 pix2vox_f       https://gateway.infinitescript.com/?fileName=Pix2Vox-F-ShapeNet.pth   (captcha - browser only)
 umiformer       https://drive.usercontent.google.com/download?id=1kgqhxsm-H3MCCjYz5Ur1Hlmt6onYCn_g&export=download&confirm=t
 umiformer_plus  https://github.com/GaryZhu1996/UMIFormer  (the "+" checkpoint)
-
-# no longer registered, only needed to re-test the decision to drop them:
-occnet          https://s3.eu-central-1.amazonaws.com/avg-projects/occupancy_networks/models/onet_img2mesh_3-f786b04a.pt
-triposr         https://huggingface.co/stabilityai/TripoSR
 ```
 
 Paths come from `config.py` or the matching env vars: `PIX2VOX_F_CKPT`,
-`UMIFORMER_CKPT`, `UMIFORMER_PLUS_CKPT` (and `OCCNET_CKPT`, `TRIPOSR_DIR`).
+`UMIFORMER_CKPT`, `UMIFORMER_PLUS_CKPT`.
 
-### Not registered, and why
+### Also measured and dropped (code removed)
 
 * **`r2n2`** — weights fine (215,798,999 bytes, 63 arrays), mapping provably correct
   (exact 35,968,706 parameter match), but the forward pass scores **IoU 0.031** vs a
-  published 0.466. A port bug, not a weights bug. Left out so it cannot poison the
-  reward. See the module docstring.
+  published 0.466. A port bug, not a weights bug.
 * **`pixelnerf`** — strict-loads all 278 tensors, but the cameras reconstructed from
   Choy's `rendering_metadata.txt` do not agree with the renderings: projecting known
   ground-truth voxels through them puts only **0.55** of the projection inside the
   silhouette, where a correct convention gives ~0.95, and that was the best of 1,536
-  conventions swept. Fix is to use the DVR/NMR release, which ships exact
-  `cameras.npz`. See the module docstring.
+  conventions swept. The DVR/NMR release, which ships exact `cameras.npz`,
+  would be the way to revisit it.
 * **`pix2vox_a`** — works (0.638/0.665/0.667) but is strictly dominated by
   UMIFormer at equal-or-lower quality and higher cost, so it can never win.
 
@@ -171,8 +164,8 @@ Training does not run usefully on CPU. Everything is env-var driven:
 ```bash
 export SHAPENET_ROOT=/data/ShapeNet          # holds ShapeNetRendering/ and ShapeNetVox32/
 export PIX2VOX_F_CKPT=/weights/Pix2Vox-F-ShapeNet.pth
-export OCCNET_CKPT=/weights/onet_img2mesh_3-f786b04a.pt
 export UMIFORMER_CKPT=/weights/UMIFormer-ShapeNet.pth
+export UMIFORMER_PLUS_CKPT=/weights/UMIFormerPlus-ShapeNet.pth
 
 python train.py --n-envs 4
 ```
@@ -310,10 +303,6 @@ value at all: same architecture, same cost, decided purely on quality.
   UMIFormer+ at 3 views is 0.0021).
 * Benchmark on the **test** split. Train-split models inflate badly — Pix2Vox-A scored
   0.84 there versus 0.67 on test.
-* **`occnet`, if you re-enable it**, is scored against binvox ground truth while
-  trained against watertight-mesh occupancy, and its released model is
-  single-image conditioned with mean-pool multi-view fusion added here. Its
-  absolute number is therefore not comparable to its paper.
 
 ---
 
@@ -323,8 +312,7 @@ value at all: same architecture, same cost, decided purely on quality.
 backbones/          one module per backbone + shared Backbone protocol and voxel_iou
   selftest.py       weights load, shapes sane
   bench.py          IoU vs published figures — the integration correctness gate
-  calibrate_pixelnerf.py
-  _vendor/          upstream network code, imports rewritten to be local
+  _vendor/          upstream UMIFormer code, imports rewritten to be local
 env/                ViewReconEnv, state builders, tests
 policy/             ViewPolicy — two actor heads, shared trunk
 training/           PPO trainer, rollout buffer, vec envs, loop test
