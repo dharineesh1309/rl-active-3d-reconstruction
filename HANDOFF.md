@@ -154,8 +154,34 @@ recovered by replaying the eval RNG against the cache -- the replay reproduces
 the logged random/oracle exactly). So: pose-conditioned arms lead the index arm
 at matched steps (set_pose - set_index ~2.8 SE at 42k, unpaired, one of several
 looks); set encoder vs mean pooling is indistinguishable; all arms still
-learning (entropy 2.4-2.8 against 3.07 uniform). Suggestive, not settled --
-`eval_0b.py` re-evaluates the checkpoints paired, from 4 start views per object.
+learning (entropy 2.4-2.8 against 3.07 uniform).
+
+**Settled by the paired re-eval** (`eval_0b.py`, same 312 objects, 4 start
+views each; `artifacts/tier0b/eval_0b.json`). Its one-start gate reproduced the
+training eval exactly (+0.0069, 16.6%), so checkpoint and cache load as trained.
+
+| a - b, per object | mean | se | z | 95% CI (bootstrap) |
+|---|---|---|---|---|
+| set_pose - set_index | **+0.0053** | 0.0017 | +3.1 | [+0.0020, +0.0086] |
+| set_pose - mean_pose | +0.0009 | 0.0014 | +0.6 | [-0.0019, +0.0035] |
+| set_index - mean_pose | -0.0044 | 0.0014 | -3.2 | [-0.0071, -0.0018] |
+
+Against random: set_pose +0.0067 (z 5.1, 16.1% of headroom), mean_pose +0.0058
+(14.0%), set_index +0.0014 (z 1.2, 3.4%). set_pose is positive in 12 of 13
+categories (cabinet ~0; largest on display, +0.019).
+
+* **The action abstraction was the problem.** The pose head beats the index
+  head with the encoder held fixed, although the index arm trained on 56% more
+  steps.
+* **The set transformer's contribution is not detected.** Mean pooling is
+  within noise. set_pose stays the proposed model (higher estimate, 34% fewer
+  steps), but report the encoder ablation as null.
+* In absolute terms view selection is worth ~0.007 IoU here, ~1/6 of the
+  best-of-24 headroom. Consistent with the earlier +0.0402 ceiling for a
+  perfect planner: this task has a small view-selection signal.
+
+**Tier 0B gate: passed.** No GT in the policy, invariance and synthetic tests
+pass, pose arm beats the index arm, held-out regret improves.
 
 Things this run taught:
 * **Nothing reached 200k steps.** Throughput is set by cache misses, ~0.6 s
