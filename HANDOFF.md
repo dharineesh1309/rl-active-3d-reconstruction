@@ -199,6 +199,15 @@ Things this run taught:
   test-split objects** written by the evals. Tier 1 must split by object via
   `datasets/ShapeNet.json`, never by row. It also covers one view count only.
 
+### Backbone determinism (checked 2026-10-01)
+
+UMIFormer's token clustering adds `torch.rand(...) * 1e-6` to break density
+ties at inference. Measured on 6 objects, 5 views, CPU: across 4 RNG seeds and
+3 view orders per object, IoU at 0.4 did not change for any backbone; max
+probability change 2.3e-5. The cache's "deterministic, order-free" assumption
+holds in practice. Side effect still to fix: that call consumes the global
+torch RNG, so cache misses shift the policy's sampling stream.
+
 ### Tier 1 -- router, in progress
 
 `extract_router_feats.py` (Kaggle GPU, once) writes the policy's own ResNet
