@@ -5,7 +5,7 @@ Every backbone exposes the same small surface, so ViewReconEnv can treat them
 alike and the policy's model head just picks an index into `load_backbones()`:
 
     .name                   str    identifier used in logs and checkpoints
-    .cost                   float  relative compute, scaled by Config.cost_lambda
+    .cost                   float  CPU seconds per 5-view prediction (cost v1, config.py)
     .predict(images, cams)  ->     (32, 32, 32) float32 occupancy probabilities
 
 `images` is the list of PIL Images the agent selected this episode. Each backbone
