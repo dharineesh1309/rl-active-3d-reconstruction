@@ -32,12 +32,21 @@ The --keep best checkpoints by dev (policy - random) are kept as
 <arm>_s<steps>.pt, plus <arm>_last.pt with the full training state.
 
 Resume restores policy, optimizer, counters, every RNG (torch, CUDA, numpy,
-python, and each environment's object stream) and the best-checkpoint list.
-Episodes in flight at the cut are dropped: the environments start fresh
-episodes from their restored object streams.
+python, and each environment's object stream) and the best-checkpoint list,
+and refuses unless the resolved experiment is identical: arguments, PPO
+settings, lambda, costs, thresholds, checkpoint hashes, scoring version, the
+manifest's hash and the hashes of the object lists actually loaded. Only
+--steps, --max-hours, --out, --cache and --resume may change. This is
+continuation, not exact reproduction: episodes in flight at the cut are
+dropped and the environments start fresh ones from their restored streams.
+
+The full dev set and (unless --categories/--limit ask for a subset) the full
+controller_train set must load, all three backbones must be present, and
+converted legacy labels are checked by recomputation before training starts.
 """
 
 import argparse
+import hashlib
 import json
 import os
 import random
@@ -83,31 +92,66 @@ class Cfg:
     phase2_episodes = 0
 
 
+def _sha(text) -> str:
+    return "sha256:" + hashlib.sha256(text.encode()).hexdigest()
+
+
 def build(args):
     from backbones import load_backbones
     from config import Config
     from dataloader_shapenet import build_shapenet
     from env.rgb_view_env import RGBViewEnv, ResNetFeatures
     from policy.pose_policy import RGBPosePolicy
-    from splits import load as load_splits
-    from training.utility_envelope import UtilityEnvelope
+    from splits import DEFAULT as SPLITS_PATH, load as load_splits, taxonomy
+    from training.utility_envelope import SCORING, UtilityEnvelope, checkpoint_ids
 
     base = Config()
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"device {device}")
 
     S = load_splits()
+    _, where = taxonomy()
+    in_cats = lambda m: args.categories is None or any(
+        c in args.categories for c in (where[m][0][0], where[m][0][1]))
     train_ds = build_shapenet(split="test", categories=args.categories,
                               only_ids=S["controller_train"],
                               limit_per_category=args.limit)
+    train_ids = sorted(m for _, m in train_ds.samples)
+    want = {m for m in S["controller_train"] if in_cats(m)}
+    if args.limit is None and set(train_ids) != want:
+        raise SystemExit(f"controller_train incomplete on disk: {len(train_ids)} of "
+                         f"{len(want)}. Pass --limit/--categories for a subset.")
     dev_ds = build_shapenet(split="test", categories=args.categories,
                             limit_per_category=DEV_PREFIX)
-    bbs = load_backbones(base, device=device)
+    dev_ids = {m for m in S["dev"] if in_cats(m)}
+    missing = dev_ids - {m for _, m in dev_ds.samples}
+    if missing:
+        raise SystemExit(f"{len(missing)} dev objects missing on disk; the dev set "
+                         "must be complete")
+
+    bbs = load_backbones(base, device=device, require_all=True)
+    ckpts = checkpoint_ids(bbs, base)
     envelope = UtilityEnvelope(
-        bbs, cost_lambda=base.cost_lambda, cache_path=args.cache, cfg=base,
+        bbs, cost_lambda=base.cost_lambda, cache_path=args.cache, checkpoints=ckpts,
         run={"script": "run_0b", "arm": args.arm, "seed": args.seed,
              "budget": args.budget, "train": "controller_train", "splits": SPLITS},
         verbose=True)
+    dev_index = {m: i for i, (_, m) in enumerate(dev_ds.samples)}
+    diff = envelope.verify_legacy(lambda m: dev_ds[dev_index[m]], dev_ids)
+    if diff is not None:
+        print(f"  [utility] legacy labels reproduce with these checkpoints "
+              f"(max |dIoU| {diff:.1e})")
+
+    config = {
+        "args": {k: v for k, v in vars(args).items()
+                 if k not in ("steps", "max_hours", "out", "cache", "resume")},
+        "ppo": {k: v for k, v in vars(Cfg).items() if not k.startswith("_")},
+        "cost_lambda": envelope.lam, "costs": envelope.costs,
+        "thresholds": envelope.thr, "checkpoints": ckpts, "scoring": SCORING,
+        "splits_sha256": _sha(Path(SPLITS_PATH).read_text()),
+        "train_ids": {"n": len(train_ids), "sha256": _sha("\n".join(train_ids))},
+        "dev_ids": {"n": len(dev_ids), "sha256": _sha("\n".join(sorted(dev_ids)))},
+    }
 
     # One feature extractor shared by every environment: ResNet-50 is frozen, so
     # a copy per environment would be pure duplication, and the cache is shared.
@@ -117,21 +161,32 @@ def build(args):
                        group_sync_seed=args.seed)
             for _ in range(Cfg.n_envs)]
     policy = RGBPosePolicy(n_candidates=train_ds.n_views, **ARMS[args.arm])
-    return policy, envs, dev_ds, S["dev"], envelope, feats, device
+    return policy, envs, dev_ds, dev_ids, envelope, feats, device, config
 
 
-def greedy_views(policy, test_ds, envelope, feats, budget, device, item, i, start):
+class _One:
+    """A one-object dataset, so an episode env loads nothing else."""
+
+    def __init__(self, item):
+        self.item, self.n_views = item, len(item["images"])
+
+    def __len__(self):
+        return 1
+
+    def __getitem__(self, i):
+        return self.item
+
+
+def greedy_views(policy, utility_fn, feats, budget, device, item, start):
     """One greedy episode on `item`, starting from view `start`."""
     from env.rgb_view_env import RGBViewEnv, stack_obs, to_tensor
-    from policy.pose_policy import pose_descriptor
 
-    env = RGBViewEnv(test_ds, envelope, view_budget=budget, features=feats,
-                     device=device, seed_initial_view=True)
-    env.item, env.model_id = item, item.get("model_id", str(i))
-    env.cand_poses = pose_descriptor(item["cams"], env.d_mean, env.d_std)
-    env.selected, env.step_count, env.done = [], 0, False
+    # No random seed view: the start is given, so nothing is acquired or
+    # featurised only to be thrown away.
+    env = RGBViewEnv(_One(item), utility_fn, view_budget=budget, features=feats,
+                     device=device, seed_initial_view=False)
     env._acquire(start)
-    env.step_count = 0
+    env.step_count = 0                       # the free start view, as in training
 
     obs = env._obs()
     while not env.done:
@@ -142,7 +197,7 @@ def greedy_views(policy, test_ds, envelope, feats, budget, device, item, i, star
 
 
 def evaluate(policy, test_ds, envelope, feats, budget, n_subsets, device, seed=0,
-             n_starts=1, keep=None):
+             n_starts=1, keep=None, policy_ref=None):
     """
     Policy views vs random vs best-of-N-subsets, on held-out objects.
 
@@ -152,8 +207,10 @@ def evaluate(policy, test_ds, envelope, feats, budget, n_subsets, device, seed=0
     draws -- and so already in the cache. Random and oracle do not depend on
     the start view: they are budget+1 views drawn at random.
 
-    `keep` restricts scoring to those model ids. Objects outside it still get
-    their random draws, so the stream -- and the cache -- stays aligned.
+    `keep` restricts scoring to those model ids, and every one of them must be
+    scored. Objects outside it still get their random draws, so the stream --
+    and the cache -- stays aligned. `policy_ref` (a step or checkpoint name) is
+    recorded with the view sets the policy generates.
 
     Per-object values are returned too, so two arms evaluated with the same
     seed can be compared object by object rather than through their means.
@@ -176,21 +233,24 @@ def evaluate(policy, test_ds, envelope, feats, budget, n_subsets, device, seed=0
 
         item = test_ds[i]
         u = []
+        envelope.tag = {"kind": "eval_policy", "ref": policy_ref}
         for s in starts:
-            views = greedy_views(policy, test_ds, envelope, feats, budget, device,
-                                 item, i, s)
+            views = greedy_views(policy, envelope, feats, budget, device, item, s)
             assert len(views) == k
             u.append(envelope(item, views))
         pol_u.append(float(np.mean(u)))
+        envelope.tag = {"kind": "eval_random", "ref": seed}
         vals = [envelope(item, s) for s in subsets]
         rnd_u.append(float(np.mean(vals)))
         orc_u.append(float(np.max(vals)))
         ids.append(mid)
         cats.append(item.get("category", "?"))
 
+    if keep is not None and set(ids) != set(keep):
+        raise RuntimeError(f"evaluate scored {len(ids)} of {len(keep)} required "
+                           "objects; the eval dataset is incomplete")
     if len(ids) < 2:
-        raise RuntimeError(f"evaluate scored {len(ids)} object(s): the eval "
-                           "dataset and `keep` do not overlap")
+        raise RuntimeError(f"evaluate scored {len(ids)} object(s)")
     P, R, O = map(float, (np.mean(pol_u), np.mean(rnd_u), np.mean(orc_u)))
     frac = (P - R) / (O - R) if O - R > 1e-9 else float("nan")
     d = np.array(pol_u) - np.array(rnd_u)
@@ -215,12 +275,28 @@ def save_state(path, trainer, envs, **extra):
     os.replace(tmp, path)                   # a killed session leaves the old one
 
 
-def restore_state(path, trainer, envs, expect, device):
-    st = torch.load(path, map_location=device, weights_only=False)
-    for k, v in expect.items():
-        if st.get(k) != v:
-            raise SystemExit(f"cannot resume: checkpoint {k}={st.get(k)!r}, "
-                             f"this run {k}={v!r}")
+def config_diff(a, b, prefix=""):
+    """Paths at which two nested config dicts differ."""
+    if not (isinstance(a, dict) and isinstance(b, dict)):
+        return [] if a == b else [prefix or "<root>"]
+    out = []
+    for k in sorted(set(a) | set(b), key=str):
+        p = f"{prefix}.{k}" if prefix else str(k)
+        out += ([p] if (k in a) != (k in b) else config_diff(a[k], b[k], p))
+    return out
+
+
+def restore_state(path, trainer, envs, config, out_dir):
+    # CPU: map_location=cuda would move the RNG states too, and
+    # torch.set_rng_state only takes a CPU ByteTensor. The policy and the
+    # optimizer copy their tensors onto the parameters' device on load.
+    st = torch.load(path, map_location="cpu", weights_only=False)
+    diff = config_diff(st.get("config", {}), config)
+    if diff:
+        raise SystemExit("cannot resume, the experiment differs at: " + ", ".join(diff))
+    gone = [n for _, _, n in st["best"] if not (Path(out_dir) / n).is_file()]
+    if gone:
+        raise SystemExit(f"kept checkpoints missing from {out_dir}: {gone}")
     trainer.policy.load_state_dict(st["policy"])
     trainer.opt.load_state_dict(st["opt"])
     trainer.total_steps, trainer.total_episodes = st["steps"], st["episodes"]
@@ -267,7 +343,7 @@ def main():
 
     from training.rgb_ppo_trainer import RGBPPOTrainer
 
-    policy, envs, dev_ds, dev_ids, envelope, feats, device = build(args)
+    policy, envs, dev_ds, dev_ids, envelope, feats, device, config = build(args)
     cfg = Cfg()
     cfg.phase1_episodes = 10 ** 9          # driven by the step budget instead
     trainer = RGBPPOTrainer(policy, envs, cfg, device=device)
@@ -275,11 +351,10 @@ def main():
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     last = out / f"{args.arm}_last.pt"
-    ident = {"arm": args.arm, "budget": args.budget, "seed": args.seed,
-             "splits": SPLITS, "n_envs": args.n_envs}
+    ident = {"arm": args.arm, "budget": args.budget, "config": config}
     best, next_eval, elapsed0 = [], 0, 0.0      # best: [score, steps, file]
     if args.resume:
-        st = restore_state(args.resume, trainer, envs, ident, device)
+        st = restore_state(args.resume, trainer, envs, config, out)
         best, next_eval, elapsed0 = st["best"], st["next_eval"], st["elapsed_h"]
         print(f"resumed from {args.resume} at {trainer.total_steps:,} steps")
 
@@ -292,6 +367,7 @@ def main():
     started = time.time()
     elapsed = lambda: elapsed0 + (time.time() - started) / 3600
     while trainer.total_steps < args.steps:
+        envelope.tag = {"kind": "train", "ref": trainer.total_steps}
         rewards, infos = trainer.collect()
         metrics = trainer.update()
         row = {"steps": trainer.total_steps, "episodes": trainer.total_episodes,
@@ -302,7 +378,8 @@ def main():
         if trainer.total_steps >= next_eval:
             next_eval = trainer.total_steps + args.eval_every
             ev = evaluate(policy, dev_ds, envelope, feats, args.budget,
-                          args.eval_subsets, device, seed=args.seed, keep=dev_ids)
+                          args.eval_subsets, device, seed=args.seed, keep=dev_ids,
+                          policy_ref=trainer.total_steps)
             row["eval"] = ev
             print(f"  {trainer.total_steps:>8,} steps | reward "
                   f"{row['reward']:+.4f} | H {metrics['entropy']:.3f} | "
