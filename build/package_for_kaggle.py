@@ -17,6 +17,7 @@ run against a 24-view action space, and including it invites an accidental
 resume from an incompatible policy. Copy it in deliberately if you want it.
 """
 
+import subprocess
 import zipfile
 from pathlib import Path
 
@@ -50,7 +51,12 @@ def zip_code(out: Path):
                 continue
             z.write(path, Path("rl_pipeline") / path.relative_to(PIPELINE))
             n += 1
-    print(f"  {out.name}: {n} files, {out.stat().st_size / 1e6:.1f} MB")
+        # The commit this zip was built from, so a notebook can tell this code
+        # apart from an older copy sitting in a previous run's output.
+        build = subprocess.run(["git", "describe", "--always", "--dirty"], cwd=HERE,
+                               capture_output=True, text=True).stdout.strip()
+        z.writestr("rl_pipeline/BUILD.txt", (build or "unknown") + "\n")
+    print(f"  {out.name}: {n} files, {out.stat().st_size / 1e6:.1f} MB, build {build}")
 
 
 def zip_weights(out: Path):
