@@ -70,7 +70,9 @@ class Cfg:
     n_steps_per_env = 128
     n_envs = 8
     group_baseline = True
-    anneal_lr = True
+    # Constant. Arms get cut by the time budget at different step counts, and
+    # an annealed LR would leave them at different points on the schedule.
+    anneal_lr = False
     phase1_episodes = 0        # set from the step budget below
     phase2_episodes = 0
 
