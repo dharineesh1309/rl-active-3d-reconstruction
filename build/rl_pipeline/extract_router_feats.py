@@ -52,11 +52,12 @@ def main():
     from dataloader_shapenet import _read_metadata
     from env.rgb_view_env import ResNetFeatures
     from policy.pose_policy import load_pose_norm, pose_descriptor
+    from training.utility_envelope import load_cache
 
     root = (os.environ.get("SHAPENET_RENDERING_ROOT")
             or os.path.join(os.environ["SHAPENET_ROOT"], "ShapeNetRendering"))
     where = taxonomy_index()
-    ids = sorted({k.split("|")[0] for k in json.load(open(args.cache))})
+    ids = sorted({k.split("|")[0] for k in load_cache(args.cache)["iou"]})
     keep = [m for m in ids if len(where.get(m, [])) == 1]
     print(f"{len(ids)} objects in cache, {len(ids) - len(keep)} cross-listed "
           f"skipped, {len(keep)} to extract", flush=True)
