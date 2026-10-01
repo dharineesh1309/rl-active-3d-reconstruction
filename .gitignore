@@ -13,7 +13,6 @@ __pycache__/
 # ── Editors / tooling ─────────────────────────────────────────────────────────
 .vscode/
 .idea/
-.claude/
 .DS_Store
 Thumbs.db
 
