@@ -1,0 +1,60 @@
+{
+ "backbones": [
+  "pix2vox_f",
+  "umiformer",
+  "umiformer_plus"
+ ],
+ "single": "umiformer_plus",
+ "category": {
+  "aeroplane": "umiformer_plus",
+  "bench": "umiformer_plus",
+  "cabinet": "pix2vox_f",
+  "car": "pix2vox_f",
+  "chair": "umiformer_plus",
+  "display": "umiformer_plus",
+  "lamp": "umiformer_plus",
+  "rifle": "umiformer_plus",
+  "sofa": "umiformer_plus",
+  "speaker": "umiformer_plus",
+  "table": "umiformer_plus",
+  "telephone": "umiformer",
+  "watercraft": "umiformer_plus"
+ },
+ "test": {
+  "single": {
+   "utility": 0.702336083034485,
+   "regret": 0.033376260884914744,
+   "share": {
+    "pix2vox_f": 0.0,
+    "umiformer": 0.0,
+    "umiformer_plus": 1.0
+   },
+   "captured": 0.0
+  },
+  "category": {
+   "utility": 0.7064674194380349,
+   "regret": 0.029244924481364842,
+   "share": {
+    "pix2vox_f": 0.1550353995087415,
+    "umiformer": 0.07751769975437076,
+    "umiformer_plus": 0.7674469007368877
+   },
+   "captured": 0.12378068405550978
+  },
+  "router": {
+   "utility": 0.7038891317834515,
+   "regret": 0.0318232121359483,
+   "share": {
+    "pix2vox_f": 0.15669700910273082,
+    "umiformer": 0.001083658430862592,
+    "umiformer_plus": 0.8422193324664066
+   },
+   "captured": 0.04653153791916775
+  },
+  "oracle": {
+   "utility": 0.7357123439193998,
+   "regret": 0.0,
+   "captured": 1.0
+  }
+ }
+}
