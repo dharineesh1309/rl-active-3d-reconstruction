@@ -1,29 +1,32 @@
 """
-Tier 1: supervised backbone router (CPU).
+Tier 1: two-stage backbone router (CPU).
 
-    python train_router.py --feats artifacts/router/feats.npz \
-                           --cache cache/utility_cache.json
+    python train_router.py --cv-dev 5     # before clean labels: table by CV on dev
+    python train_router.py                # table from controller_train, scored on dev
 
-Every cached view set carries the utility of all three backbones, so routing is
-full-information supervised learning, not a bandit. The router sees what the
-view policy sees -- image features and camera poses of the acquired views, no
-category label -- predicts each backbone's utility, and routes to the argmax.
+Stage 1, images -> category. Ridge on the mean ResNet-50 feature of the
+acquired views, trained on every labelled object outside dev and final_test.
+Category labels are not biased by the backbones' memorisation, so official
+train objects are fine here. A temperature-scaled softmax over its scores,
+fitted on held-out training objects, gives category probabilities.
 
-Loss: centred-utility regression plus gap-weighted pairwise ranking. Many argmax
-flips between backbones cost almost nothing; weighting each ordering mistake by
-|U_m - U_n| makes it cost what it actually costs. Only differences between
-backbones are learned: the object's overall difficulty cannot change the route.
+Stage 2, category -> backbone. A table of object-averaged utility per
+(category, backbone), built ONLY from objects no backbone saw: controller_train,
+or under --cv-dev the other dev folds.
 
-Split by OBJECT, never by row (each object has dozens of rows):
-    test  cached objects in the official test split -- the Tier 0B eval objects
-    val   a held-out slice of the remaining objects, for early stopping
-    fit   the rest
+Variants, chosen by utility on dev -- not by category accuracy:
+    argmax    the predicted category's table row
+    expected  sum_c p(c | views) * table[c], which keeps the uncertainty
 
-Reported on test objects, each object weighted equally:
-    single    best fixed backbone, chosen on fit
-    category  best backbone per category, chosen on fit (uses the label)
-    router    argmax of the router's predictions (does not)
-    oracle    best backbone for each view set
+References that are not deployable: the true-category lookup (uses the label)
+and the per-view-set oracle.
+
+Every number is object-averaged over dev, and paired comparisons bootstrap over
+objects: a view set is not an independent sample, an object is. Splits come from
+configs/splits_v1.json.
+
+This replaces a neural utility router that captured 4.7% of the gap on
+seen-object labels and ~0% on clean ones (HANDOFF, Tier 1).
 """
 
 import argparse
@@ -33,40 +36,10 @@ import sys
 from pathlib import Path
 
 import numpy as np
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from policy.pose_policy import D_MODEL, ImageProjection, PoseEncoder, ViewSetEncoder
-
-
-class Router(nn.Module):
-    """The policy's own image/pose tokens, mean-pooled (Tier 0B found the set
-    transformer added nothing measurable), then one utility per backbone."""
-
-    def __init__(self, n_out: int):
-        super().__init__()
-        self.img_proj = ImageProjection()
-        self.pose_enc = PoseEncoder()
-        self.set_enc = ViewSetEncoder(use_transformer=False)
-        self.head = nn.Sequential(nn.Linear(D_MODEL, 128), nn.GELU(),
-                                  nn.Linear(128, n_out))
-
-    def forward(self, feats, poses):
-        mask = torch.ones(feats.shape[:2], device=feats.device)
-        return self.head(self.set_enc(self.img_proj(feats), self.pose_enc(poses), mask))
-
-
-def router_loss(s, U, sigma, rank_weight=1.0):
-    """Centred MSE + gap-weighted pairwise logistic ranking, both in units of sigma."""
-    y = (U - U.mean(1, keepdim=True)) / sigma
-    mse = F.mse_loss(s - s.mean(1, keepdim=True), y)
-    i, j = torch.triu_indices(U.shape[1], U.shape[1], 1)
-    du = (U[:, i] - U[:, j]) / sigma
-    rank = (du.abs() * F.softplus(-torch.sign(du) * (s[:, i] - s[:, j]))).mean()
-    return mse + rank_weight * rank
+ALPHA = 1e3                      # ridge strength; fixed, never tuned on dev
 
 
 def object_mean(x, obj):
@@ -77,87 +50,115 @@ def object_mean(x, obj):
 
 
 def load(feats_path, cache_path):
+    """Rows of every cached view set whose object has features."""
+    from backbones import _candidates
+    from config import Config
+    from training.utility_envelope import load_cache, utilities
+
     d = np.load(feats_path)
     idx = {m: i for i, m in enumerate(d["model_id"])}
-    cache = json.load(open(cache_path))
-    names = sorted(next(iter(cache.values())))
+    costs = {c.name: c.cost for c in _candidates()}
+    lam = Config().cost_lambda
+    iou = load_cache(cache_path)["iou"]
+    names = sorted(next(iter(iou.values())))
     obj, views, U = [], [], []
-    for k, u in cache.items():
-        m, v = k.split("|")
+    for k, v in iou.items():
+        m, s = k.split("|")
         if m in idx:
+            u = utilities(v, lam, costs)
             obj.append(idx[m])
-            views.append([int(x) for x in v.split(",")])
+            views.append([int(x) for x in s.split(",")])
             U.append([u[n] for n in names])
     views = np.array(views)
-    assert views.ndim == 2, "view sets of different sizes; batch them per size"
-    return d, names, np.array(obj), views, np.array(U, np.float32)
+    assert views.ndim == 2, "view sets of different sizes; route them per size"
+    return d, names, np.array(obj), views, np.array(U)
 
 
-@torch.no_grad()
-def predict(model, F_all, P_all, obj, views, bs=2048):
-    model.eval()
-    out = []
-    for a in range(0, len(obj), bs):
-        o, v = obj[a:a + bs, None], views[a:a + bs]
-        out.append(model(F_all[o, v].float(), P_all[o, v]).numpy())
-    return np.concatenate(out)
+def set_features(F, obj, views):
+    return F[obj[:, None], views].astype(np.float32).mean(1)
 
 
-def fit(F_all, P_all, obj, views, U, fit_rows, val_rows, epochs=40, patience=6,
-        lr=1e-3, rank_weight=1.0, seed=0, verbose=True):
-    """Train on fit_rows, keep the epoch with the lowest object-averaged val regret."""
-    torch.manual_seed(seed)
-    rng = np.random.default_rng(seed)
-    model = Router(U.shape[1])
-    opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
-    Ut = torch.from_numpy(U)
-    c = U[fit_rows] - U[fit_rows].mean(1, keepdims=True)
-    sigma = float(c.std())
-    best = (float("inf"), None, -1)
-    bad = 0
-    for ep in range(epochs):
-        model.train()
-        order = rng.permutation(fit_rows)
-        for a in range(0, len(order), 512):
-            r = order[a:a + 512]
-            o, v = obj[r, None], views[r]
-            s = model(F_all[o, v].float(), P_all[o, v])
-            loss = router_loss(s, Ut[r], sigma, rank_weight)
-            opt.zero_grad()
-            loss.backward()
-            opt.step()
-        s = predict(model, F_all, P_all, obj[val_rows], views[val_rows])
-        Uv = U[val_rows]
-        regret = Uv.max(1) - Uv[np.arange(len(Uv)), s.argmax(1)]
-        reg = object_mean(regret, obj[val_rows])
-        if verbose:
-            print(f"  epoch {ep:>2}  loss {loss.item():.4f}  val regret {reg:.5f}",
-                  flush=True)
-        if reg < best[0] - 1e-6:
-            best = (reg, {k: t.clone() for k, t in model.state_dict().items()}, ep)
-            bad = 0
-        else:
-            bad += 1
-            if bad >= patience:
-                break
-    model.load_state_dict(best[1])
-    return model, best[2]
+def fit_classifier(X, y, obj, classes):
+    """Object-weighted ridge, one-hot targets: returns (mu, sd, W)."""
+    mu, sd = X.mean(0), X.std(0) + 1e-6
+    Z = (X - mu) / sd
+    Y = (y[:, None] == classes[None]).astype(np.float32)
+    w = 1.0 / np.bincount(obj)[obj]
+    W = np.linalg.solve(Z.T @ (Z * w[:, None]) + ALPHA * np.eye(Z.shape[1]),
+                        (Z * w[:, None]).T @ Y)
+    return mu, sd, W
 
 
-def report(U, obj, rows, picks, names):
-    """Object-averaged utility and regret per method on `rows`."""
-    Ur, o = U[rows], obj[rows]
-    oracle = object_mean(Ur.max(1), o)
-    out = {}
-    for name, p in picks.items():
-        u = object_mean(Ur[np.arange(len(rows)), p], o)
-        out[name] = {"utility": u, "regret": oracle - u,
-                     "share": {n: float(np.mean(p == k)) for k, n in enumerate(names)}}
-    out["oracle"] = {"utility": oracle, "regret": 0.0}
-    gap = oracle - out["single"]["utility"]
-    for v in out.values():
-        v["captured"] = (v["utility"] - out["single"]["utility"]) / gap if gap > 0 else float("nan")
+def class_scores(clf, X):
+    mu, sd, W = clf
+    return ((X - mu) / sd) @ W
+
+
+def softmax(s, T):
+    z = s / T
+    z = z - z.max(1, keepdims=True)
+    e = np.exp(z)
+    return e / e.sum(1, keepdims=True)
+
+
+def fit_temperature(scores, y, classes):
+    t = np.searchsorted(classes, y)
+    grid = np.logspace(-3, 1, 81)
+    nll = [-np.log(softmax(scores, T)[np.arange(len(t)), t] + 1e-12).mean() for T in grid]
+    return float(grid[int(np.argmin(nll))])
+
+
+def fit_table(U, obj, cat_of_row, classes, fallback):
+    """(C, K) object-averaged utility; a category with no rows gets `fallback`."""
+    tab = np.tile(fallback, (len(classes), 1))
+    for i, c in enumerate(classes):
+        r = cat_of_row == c
+        if r.any():
+            tab[i] = [object_mean(U[r, k], obj[r]) for k in range(U.shape[1])]
+    return tab
+
+
+def route(scores, T, table, classes_idx=None):
+    """{variant: picks}; with classes_idx also the true-label reference."""
+    out = {"argmax": table[scores.argmax(1)].argmax(1),
+           "expected": (softmax(scores, T) @ table).argmax(1)}
+    if classes_idx is not None:
+        out["category (true label)"] = table[classes_idx].argmax(1)
     return out
+
+
+def summarise(U, obj, picks, names, seed=0):
+    """Object-averaged utility/regret per method, and a bootstrap CI over
+    objects for each method against the best single backbone."""
+    oracle = U.max(1)
+    per_obj = lambda x: np.array([x[obj == o].mean() for o in np.unique(obj)])
+    o_oracle = per_obj(oracle)
+    res = {}
+    rng = np.random.default_rng(seed)
+    boot = rng.integers(len(o_oracle), size=(2000, len(o_oracle)))
+    base = per_obj(U[np.arange(len(U)), picks["single"]])
+    for m, p in picks.items():
+        u = per_obj(U[np.arange(len(U)), p])
+        d = u - base
+        lo, hi = np.percentile(d[boot].mean(1), [2.5, 97.5])
+        res[m] = {"utility": float(u.mean()), "regret": float((o_oracle - u).mean()),
+                  "vs_single": float(d.mean()), "vs_single_ci95": [float(lo), float(hi)],
+                  "share": {n: float(np.mean(p == k)) for k, n in enumerate(names)}}
+    gap = res["single"]["regret"]
+    for v in res.values():
+        v["captured"] = (gap - v["regret"]) / gap if gap > 0 else float("nan")
+    res["oracle"] = {"utility": float(o_oracle.mean()), "regret": 0.0, "captured": 1.0}
+    return res
+
+
+def print_report(title, res, acc):
+    print(f"\n{title}   (category accuracy from views {acc*100:.1f}%)")
+    print(f"  {'':<22} {'utility':>8} {'regret':>8} {'captured':>9}   vs single [95% CI]")
+    for m, v in res.items():
+        ci = (f"{v['vs_single']:+.4f} [{v['vs_single_ci95'][0]:+.4f}, "
+              f"{v['vs_single_ci95'][1]:+.4f}]") if "vs_single" in v else ""
+        print(f"  {m:<22} {v['utility']:>8.4f} {v['regret']:>8.4f} "
+              f"{v['captured']*100:>8.1f}%   {ci}")
 
 
 def main():
@@ -165,63 +166,83 @@ def main():
     ap.add_argument("--feats", default="artifacts/router/feats.npz")
     ap.add_argument("--cache", default="cache/utility_cache.json")
     ap.add_argument("--out", default="artifacts/router")
-    ap.add_argument("--rank-weight", type=float, default=1.0)
-    ap.add_argument("--val-frac", type=float, default=0.15)
+    ap.add_argument("--cv-dev", type=int, default=0,
+                    help="K: build the table by K-fold CV over dev objects")
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
 
+    from splits import load as load_splits
+
+    S = load_splits()
     d, names, obj, views, U = load(args.feats, args.cache)
-    F_all = torch.from_numpy(d["feats"])
-    P_all = torch.from_numpy(d["poses"])
-    cats = d["category"]
+    mids, cats = d["model_id"], d["category"]
+    classes = np.unique(cats)
+    in_ = lambda key: np.array([m in S[key] for m in mids])
+    is_dev, is_final, is_ctrl = in_("dev"), in_("final_test"), in_("controller_train")
+    assert not is_final.any(), "final_test objects in the router data"
+    X = set_features(d["feats"], obj, views)
 
-    is_test = d["split"] == "test"
-    rest = np.flatnonzero(~is_test)
+    # Stage 1 on everything labelled outside dev, minus a slice for T.
+    clf_obj = np.flatnonzero(~is_dev)
     rng = np.random.default_rng(args.seed)
-    val_obj = set(rng.choice(rest, int(len(rest) * args.val_frac), replace=False).tolist())
-    test_rows = np.flatnonzero(is_test[obj])
-    val_rows = np.flatnonzero([(not is_test[o]) and o in val_obj for o in obj])
-    fit_rows = np.flatnonzero([(not is_test[o]) and o not in val_obj for o in obj])
-    assert not (set(obj[fit_rows]) & set(obj[test_rows])), "object leak fit/test"
-    assert not (set(obj[fit_rows]) & set(obj[val_rows])), "object leak fit/val"
-    print(f"backbones {names}")
-    for n, r in (("fit", fit_rows), ("val", val_rows), ("test", test_rows)):
-        print(f"  {n:<5} {len(r):>6} rows  {len(set(obj[r])):>5} objects")
+    t_obj = set(rng.choice(clf_obj, len(clf_obj) // 7, replace=False).tolist())
+    r_fit = np.flatnonzero(~is_dev[obj] & ~np.isin(obj, list(t_obj)))
+    r_T = np.flatnonzero(np.isin(obj, list(t_obj)))
+    clf = fit_classifier(X[r_fit], cats[obj[r_fit]], obj[r_fit], classes)
+    T = fit_temperature(class_scores(clf, X[r_T]), cats[obj[r_T]], classes)
+    clf = fit_classifier(X[~is_dev[obj]], cats[obj[~is_dev[obj]]], obj[~is_dev[obj]], classes)
 
-    model, ep = fit(F_all, P_all, obj, views, U, fit_rows, val_rows,
-                    rank_weight=args.rank_weight, seed=args.seed)
-    print(f"best epoch {ep}")
+    dev_rows = np.flatnonzero(is_dev[obj])
+    sc = class_scores(clf, X[dev_rows])
+    true_idx = np.searchsorted(classes, cats[obj[dev_rows]])
+    acc = object_mean((sc.argmax(1) == true_idx).astype(float), obj[dev_rows])
 
-    # Baselines are chosen on fit rows only.
-    Uf, of = U[fit_rows], obj[fit_rows]
-    single = int(np.argmax([object_mean(Uf[:, k], of) for k in range(len(names))]))
-    by_cat = {}
-    for c in np.unique(cats):
-        r = cats[of] == c
-        by_cat[c] = (int(np.argmax([object_mean(Uf[r, k], of[r]) for k in range(len(names))]))
-                     if r.any() else single)
+    picks = {k: np.zeros(len(dev_rows), int) for k in
+             ("single", "argmax", "expected", "category (true label)")}
+    if args.cv_dev:
+        dev_objs = np.sort(np.unique(obj[dev_rows]))
+        folds = np.array_split(np.random.default_rng(args.seed).permutation(dev_objs),
+                               args.cv_dev)
+        for f in folds:
+            te = np.isin(obj[dev_rows], f)
+            tr = dev_rows[~te]
+            single = np.array([object_mean(U[tr, k], obj[tr]) for k in range(len(names))])
+            table = fit_table(U[tr], obj[tr], cats[obj[tr]], classes, single)
+            picks["single"][te] = single.argmax()
+            for k, p in route(sc[te], T, table, true_idx[te]).items():
+                picks[k][te] = p
+        table_src = f"{args.cv_dev}-fold CV over dev objects"
+        fold_ids = [[str(mids[o]) for o in f] for f in folds]
+    else:
+        tr = np.flatnonzero(is_ctrl[obj])
+        assert len(tr), "no controller_train rows in the cache yet; use --cv-dev"
+        single = np.array([object_mean(U[tr, k], obj[tr]) for k in range(len(names))])
+        table = fit_table(U[tr], obj[tr], cats[obj[tr]], classes, single)
+        picks["single"][:] = single.argmax()
+        picks.update(route(sc, T, table, true_idx))
+        table_src = f"controller_train, {len(set(obj[tr]))} objects"
+        fold_ids = None
 
-    s = predict(model, F_all, P_all, obj[test_rows], views[test_rows])
-    picks = {"single": np.full(len(test_rows), single),
-             "category": np.array([by_cat.get(c, single) for c in cats[obj[test_rows]]]),
-             "router": s.argmax(1)}
-    res = report(U, obj, test_rows, picks, names)
-
-    print(f"\ntest, {len(set(obj[test_rows]))} held-out objects, object-averaged:")
-    print(f"  {'':<9} {'utility':>8} {'regret':>8} {'captured':>9}   picks")
-    for k, v in res.items():
-        share = "  ".join(f"{n} {p*100:4.1f}%" for n, p in v.get("share", {}).items())
-        print(f"  {k:<9} {v['utility']:>8.4f} {v['regret']:>8.4f} "
-              f"{v['captured']*100:>8.1f}%   {share}")
+    res = summarise(U[dev_rows], obj[dev_rows], picks, names)
+    deployable = ("argmax", "expected")
+    chosen = max(deployable, key=lambda m: res[m]["utility"])
+    print_report(f"dev, {len(set(obj[dev_rows]))} objects; table: {table_src}; "
+                 f"T={T:.3g}", res, acc)
+    print(f"\nselected variant (dev utility): {chosen}")
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
-    torch.save({"router": model.state_dict(), "backbones": names,
-                "best_epoch": ep, "args": vars(args)}, out / "router.pt")
-    (out / "router_report.json").write_text(json.dumps(
-        {"backbones": names, "single": names[single],
-         "category": {c: names[k] for c, k in by_cat.items()}, "test": res}, indent=1))
-    print(f"\nwrote {out / 'router.pt'} and router_report.json")
+    tag = f"cv{args.cv_dev}" if args.cv_dev else "ctrl"
+    report = {"table_source": table_src, "variant": chosen, "temperature": T,
+              "category_accuracy": acc, "backbones": names, "dev": res,
+              "folds": fold_ids, "alpha": ALPHA, "seed": args.seed}
+    (out / f"router_report_{tag}.json").write_text(json.dumps(report, indent=1))
+    if not args.cv_dev:
+        np.savez(out / "router.npz", classes=classes, backbones=np.array(names),
+                 mu=clf[0], sd=clf[1], W=clf[2], T=T, table=table,
+                 variant=np.array(chosen))
+    print(f"wrote {out / f'router_report_{tag}.json'}"
+          + ("" if args.cv_dev else f" and {out / 'router.npz'}"))
 
 
 if __name__ == "__main__":
