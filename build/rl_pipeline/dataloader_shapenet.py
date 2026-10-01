@@ -140,6 +140,9 @@ class ShapeNetChoyDataset:
         Taxonomy names ('chair') or synset ids ('03001627'). None = all 13.
     limit_per_category : int | None
         Cap models per category. Useful for a quick bench without the full split.
+    only_ids : set | None
+        Keep only these model ids (a controller split from splits.py), applied
+        before the on-disk check so it costs no filesystem calls.
     preload : bool
         Cache every item up front. Fast, but the full train split will not fit
         in RAM — intended for small subsets only.
@@ -156,6 +159,7 @@ class ShapeNetChoyDataset:
         n_views: Optional[int] = None,
         preload: bool = False,
         verify_views: bool = False,
+        only_ids: Optional[set] = None,
     ):
         self.rendering_root = Path(rendering_root)
         self.voxel_root = Path(voxel_root)
@@ -187,6 +191,8 @@ class ShapeNetChoyDataset:
                 ids = entry.get("train", []) + entry.get("val", []) + entry.get("test", [])
             else:
                 ids = entry.get(split, [])
+            if only_ids is not None:
+                ids = [m for m in ids if m in only_ids]
 
             # Keep only what is actually on disk. Capping the id list first
             # would truncate to ids we may not hold and silently yield nothing,
