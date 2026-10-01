@@ -108,7 +108,7 @@ def available_backbone_names(cfg) -> list:
     return [c.name for c in _candidates() if c.available(cfg)]
 
 
-def load_backbones(cfg, device: str = "cpu") -> list:
+def load_backbones(cfg, device: str = "cpu", require_all: bool = False) -> list:
     """
     Instantiate every backbone whose weights are on disk.
 
@@ -117,11 +117,16 @@ def load_backbones(cfg, device: str = "cpu") -> list:
     would silently invalidate a trained model head, so append, never insert.
 
     A backbone with missing weights is skipped with a notice rather than
-    raising, so the pipeline runs with whatever is actually available.
+    raising, so the pipeline runs with whatever is actually available --
+    unless `require_all`, which experiments set: labels from two backbones are
+    not comparable with labels from three.
     """
     loaded = []
     for cls in _candidates():
         if not cls.available(cfg):
+            if require_all:
+                raise RuntimeError(f"{cls.name}: weights not found, and this "
+                                   "experiment requires all registered backbones")
             print(f"[backbones] {cls.name}: weights not found, skipping")
             continue
         loaded.append(cls(cfg, device=device))
