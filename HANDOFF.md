@@ -26,7 +26,7 @@ router picks the backbone. STOP is an optional extension, gated on a pilot.
 
 | order | work | status |
 |---|---|---|
-| 0 | freeze splits, cache v2, cost definition, router code, resume, RGB inference | **done** |
+| 0 | freeze splits, cache v2, cost definition, router code, resume, RGB inference | **substantially done**: CUDA resume and legacy-label verification run as gates at the start of Phase 1; `router.npz` is a Phase 2 output |
 | 1 | retrain `set_pose` on `controller_train` (Kaggle), select checkpoints on dev | next |
 | 2 | router from that run's cache; top up thin categories | |
 | 3 | dev evaluation matrix + latency + lambda sensitivity | |
@@ -48,24 +48,32 @@ trained on. Controller splits are carved from the official TEST split:
 
 **Cost v1** (`config.py`): `backbone.cost` = CPU seconds per 5-view prediction
 (Pix2Vox-F 0.51, UMIFormer/UMIFormer+ 1.28); `cost_lambda` = 0.0771 IoU/s,
-chosen to keep the earlier operating point exactly (penalty gap 0.0594). All
-56,592 cached decisions are unchanged; absolute utilities are 0.033 lower than
-in older tables (differences are not). Controller overhead is not priced and
-must be reported: on CPU, policy + ResNet took 1.66 s (with model loading)
-against Pix2Vox-F's 0.45 s in one `infer_rgb.py` run.
+chosen to keep the earlier operating point (penalty gap 0.0594, to 1e-5). All
+56,592 cached routing decisions are unchanged; absolute utilities shift by an
+approximately uniform -0.033 (-0.033021 Pix2Vox-F, -0.033028 UMIFormers), so
+older tables differ in level, not in differences. Controller overhead is not
+priced and must be reported. One `infer_rgb.py` run on CPU, warm, loading
+excluded: view selection (policy + ResNet) 0.43 s, router 1.5 ms, Pix2Vox-F
+0.53 s. Loading was 1.5 s (policy + ResNet) and 1.8 s (Pix2Vox-F).
 
 **Cache v2** (`training/utility_envelope.py`): raw IoU per backbone, so lambda
-and costs apply at read time; records thresholds, checkpoint identities and the
-run that produced each entry; refuses mismatched labels; backbone calls run in
-a forked, reseeded RNG. `cache/utility_cache.json` is the converted Tier 0B
-cache (run `legacy`, IoU derived as utility + 0.07 * old cost; original kept as
-`cache/utility_cache_legacy.json`).
+and costs apply at read time; records the scoring version, thresholds, and per
+run the SHA-256 of each checkpoint (file name and size are not enough: the two
+UMIFormer files have identical sizes); each entry records its run, kind
+(train / eval_policy / eval_random) and policy step or checkpoint; refuses
+mismatched labels; backbone calls run in a forked, reseeded RNG.
+`cache/utility_cache.json` is the converted Tier 0B cache: run `legacy`, IoU
+derived as utility + 0.07 * old cost, checkpoints "unknown" until
+`verify_legacy()` reproduces a sample of its labels (run_0b does this on dev
+objects before training). Original kept as `cache/utility_cache_legacy.json`.
 
 **Router** (`train_router.py`): two-stage, reproduced from committed code by
 5-fold CV on dev (`artifacts/router/router_report_cv5.json`): category
 accuracy 88.3%; argmax 18.0% of the routing gap; **expected (category
 probabilities) 19.8%, +0.0066 vs best single backbone, 95% CI [+0.0037,
-+0.0095]**; true-label reference 22.3%.
++0.0095]**; true-label reference 22.3%. This is a development CV result. The
+interval supports beating the single backbone; it does not show that
+probability weighting beats argmax (18.0%).
 
 **Scripts**: `run_0b.py` (trains on controller_train, evaluates on dev, keeps
 the 3 best checkpoints + full-state `<arm>_last.pt`, `--resume`), `eval_0b.py`
