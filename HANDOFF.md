@@ -138,6 +138,40 @@ Gate before Tier 1: no ground-truth data in the policy, all invariance tests
 pass, synthetic tests pass, new architecture at least competitive with old,
 held-out-object view regret improves or gives a clear diagnosis.
 
+### Tier 0B, first run (Kaggle, 3 arms, B=4 plus one seeded view)
+
+Held-out eval: 312 test objects (24 per category x 13), one greedy rollout each.
+Random 0.7348, oracle (best of 24 random 5-view sets) 0.7763, headroom 0.0415.
+
+| arm | steps reached | policy - random @21.5k | @42.0k | @62.5k |
+|---|---|---|---|---|
+| set_pose | 41,984 | +0.0053 | **+0.0069** (16.6%) | -- |
+| set_index | 65,536 | +0.0031 | +0.0013 (3.2%) | +0.0030 (7.3%) |
+| mean_pose | 63,488 | +0.0018 | +0.0062 (14.9%) | +0.0071 (17.0%) |
+
+**SE of one eval is ~0.0018** (within-object sd of a 5-view set is 0.025,
+recovered by replaying the eval RNG against the cache -- the replay reproduces
+the logged random/oracle exactly). So: pose-conditioned arms lead the index arm
+at matched steps (set_pose - set_index ~2.8 SE at 42k, unpaired, one of several
+looks); set encoder vs mean pooling is indistinguishable; all arms still
+learning (entropy 2.4-2.8 against 3.07 uniform). Suggestive, not settled --
+`eval_0b.py` re-evaluates the checkpoints paired, from 4 start views per object.
+
+Things this run taught:
+* **Nothing reached 200k steps.** Throughput is set by cache misses, ~0.6 s
+  each (three backbones); every arm did 17-18.5k misses in its 3.2 h.
+* **The first arm pays for the eval baseline**: 7,488 random subsets, ~1.3 h of
+  set_pose's budget. Later arms got them from the cache, which is why set_pose
+  reached the fewest steps. Attach the cache to any later run.
+* Same seeds make the arms' early trajectories near-identical (cache hit rate
+  0.75 by 9k steps for arms 2 and 3) -- common random numbers, which helps the
+  comparison.
+* LR "annealing" was annealing over 1e9 episodes, i.e. constant 3e-4. Now
+  constant on purpose.
+* **Router dataset: 53,470 rows, all 5-view sets, and 10,833 (20%) are
+  test-split objects** written by the evals. Tier 1 must split by object via
+  `datasets/ShapeNet.json`, never by row. It also covers one view count only.
+
 Then Tier 1 (supervised router, utility regression with gap-weighted ranking --
 not classification, since 47% of argmax flips cost nearly nothing) and Tier 2
 (STOP as a 25th candidate, justified by acquisition cost; the count/routing
