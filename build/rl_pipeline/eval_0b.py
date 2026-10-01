@@ -53,7 +53,7 @@ def main():
     from env.rgb_view_env import ResNetFeatures
     from policy.pose_policy import RGBPosePolicy
     from splits import load as load_splits
-    from training.utility_envelope import UtilityEnvelope
+    from training.utility_envelope import UtilityEnvelope, checkpoint_ids
 
     base = Config()
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -63,10 +63,15 @@ def main():
         test_ds, keep = build_shapenet(split="test", limit_per_category=DEV_PREFIX), S["dev"]
     else:
         print("FINAL TEST: run once, after every choice is frozen.")
-        test_ds, keep = build_shapenet(split="test", only_ids=S["final_test"]), None
-    envelope = UtilityEnvelope(load_backbones(base, device=device),
-                               cost_lambda=base.cost_lambda, cache_path=args.cache,
-                               cfg=base, verbose=True,
+        test_ds = build_shapenet(split="test", only_ids=S["final_test"])
+        keep = S["final_test"]
+    missing = set(keep) - {m for _, m in test_ds.samples}
+    if missing:
+        raise SystemExit(f"{len(missing)} {args.split} objects missing on disk; "
+                         "the set must be complete")
+    bbs = load_backbones(base, device=device, require_all=True)
+    envelope = UtilityEnvelope(bbs, cost_lambda=base.cost_lambda, cache_path=args.cache,
+                               checkpoints=checkpoint_ids(bbs, base), verbose=True,
                                run={"script": "eval_0b", "split": args.split,
                                     "ckpts": [Path(p).name for p in args.ckpts]})
     feats = ResNetFeatures(device=device)
@@ -79,7 +84,7 @@ def main():
         policy.load_state_dict(ck["policy"])
         ev = evaluate(policy, test_ds, envelope, feats, args.budget,
                       args.eval_subsets, device, seed=args.seed,
-                      n_starts=args.starts, keep=keep)
+                      n_starts=args.starts, keep=keep, policy_ref=label)
         envelope.flush()
         res[label] = {"arm": arm, "steps": ck["steps"], "path": str(path), **ev}
         print(f"  {label:<18} {ck['steps']:>7,} steps | policy-random "
