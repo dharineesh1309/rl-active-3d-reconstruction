@@ -82,25 +82,41 @@ def main():
             "other checkpoints accepted"
 
         # Legacy: utilities written at lambda 0.07, old costs; true IoUs 1.0/0.5.
+        # Five 'a' objects come first in the file, one 'b' object last: a
+        # 2-entry sample must still take one of each category.
         old_cost = {"pix2vox_f": 0.09, "umiformer": 0.938}
+        ids = [f"a{i}" for i in range(5)] + ["b0"]
+        cat = {m: m[0] for m in ids}
         for corrupt, ok in ((0.0, True), (0.01, False)):
             leg = os.path.join(d, "legacy.json")
-            json.dump({"obj|0,2,4": {"pix2vox_f": 1.0 - 0.07 * 0.09,
-                                     "umiformer": 0.5 + corrupt - 0.07 * 0.938}},
-                      open(leg, "w"))
+            json.dump({f"{m}|0,2,4": {"pix2vox_f": 1.0 - 0.07 * 0.09,
+                                      "umiformer": 0.5 + corrupt - 0.07 * 0.938}
+                       for m in ids}, open(leg, "w"))
             conv = os.path.join(d, f"conv{ok}.json")
             convert_legacy(leg, conv, 0.07, old_cost,
                            {"pix2vox_f": 0.4, "umiformer": 0.4}, "test")
             e = UtilityEnvelope(bbs, cost_lambda=0.0771, cache_path=conv, checkpoints=CK)
-            assert e.cache["meta"]["runs"]["legacy"]["checkpoints"] == "unknown"
             try:
-                e.verify_legacy(lambda mid: item, {"obj"})
+                res = e.verify_legacy(lambda mid: {**item, "model_id": mid}, cat, n=2)
                 passed = True
             except ValueError:
                 passed = False
             assert passed == ok, f"verify_legacy with corruption {corrupt}: {passed}"
+            run = e.cache["meta"]["runs"]["legacy"]
+            assert run["checkpoints"] == "unknown", "producer must stay unknown"
             if ok:
-                assert e.cache["meta"]["runs"]["legacy"]["checkpoints"] == CK
+                rec = run["compatible_with"][0]
+                assert res == {"legacy": 0.0} and rec["checkpoints"] == CK
+                assert rec["categories"] == ["a", "b"], rec["categories"]
+                again = e.verify_legacy(lambda mid: item, cat)
+                assert again == {}, "re-verified a run already compatible"
+                good = e
+
+        # A second unknown run with nothing checkable is reported, not passed.
+        good.cache["meta"]["runs"]["orphan"] = {"checkpoints": "unknown"}
+        good.cache["iou"]["zz|1,2,3"] = {"pix2vox_f": 1.0, "umiformer": 0.5}
+        good.cache["src"]["zz|1,2,3"] = ["orphan", "unknown", None]
+        assert good.verify_legacy(lambda mid: item, cat) == {"orphan": None}
     print("Utility envelope tests passed.")
 
 
