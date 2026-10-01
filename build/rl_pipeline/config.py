@@ -29,16 +29,30 @@ class Config:
 
     # ── Environment ───────────────────────────────────────────────────────────
     n_views      = 24          # 3D-R2N2 renders 24 views per object
-    # Prices the backbone choice. B is sampled by the environment rather than
-    # chosen by the agent, so -lambda*B is a constant offset within an episode
-    # and lambda only ever affects which backbone is picked.
+    # Prices the backbone choice: utility = IoU - cost_lambda * backbone.cost.
     #
-    # Derived from the 3-category measurement in EXPERIMENTS.md §10 (airplane,
+    # COST DEFINITION v1 (frozen 2026-10-01). backbone.cost is measured CPU
+    # wall-clock seconds for one 5-view prediction on the development machine:
+    # Pix2Vox-F 0.51 s, UMIFormer 1.28 s, UMIFormer+ 1.28 s (same network).
+    # It does not include image acquisition, ResNet features, policy or router
+    # inference; those are reported separately, not priced.
+    #
+    # cost_lambda is IoU per second, chosen to keep the operating point every
+    # earlier result used. Those used undocumented units (Pix2Vox-F 0.09,
+    # UMIFormers 0.938) with lambda 0.07: a penalty gap of 0.07 * 0.848 =
+    # 0.0594 IoU between Pix2Vox-F and the UMIFormers. 0.0771 * 0.77 s gives
+    # the same gap, so every routing decision and every reported difference is
+    # unchanged; absolute utilities are 0.033 lower than in the old units.
+    #
+    # The operating point is declared, not a unique optimum. It was chosen from
+    # the 3-category measurement in EXPERIMENTS.md §10 (airplane,
     # car, chair x budgets 1/3/5/8). Per-cell crossovers run from 0.0146 to
     # 0.1348, so the live window is wide, but most of it is uninteresting: what
     # matters is where the optimal choice depends on the OBJECT and not just the
     # budget, because that is the part a budget-only lookup table cannot do and
     # a learned policy can.
+    #
+    # Numbers below are in the old units (lambda 0.07).
     #
     # At 0.07 the one-view choice splits by category -- aeroplane wants
     # UMIFormer, car and chair want Pix2Vox-F -- and all three backbones win
@@ -57,9 +71,9 @@ class Config:
     # this value: same architecture, same cost, so it is decided purely on
     # quality and survives even at lambda = 0.
     #
-    # Re-derive whenever the backbone set or the hardware changes; the costs
-    # above come from CPU wall-clock and will shift on a GPU.
-    cost_lambda  = 0.07
+    # The old RGB-D environment also charges cost_lambda per acquired view, so
+    # its per-view price moves from 0.07 to 0.0771; that pipeline is historical.
+    cost_lambda  = 0.0771
 
     # ── Parallelism ───────────────────────────────────────────────────────────
     n_envs = 8                 # number of parallel environment workers
