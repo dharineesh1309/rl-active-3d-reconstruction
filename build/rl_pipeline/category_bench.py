@@ -17,7 +17,7 @@ and `cost_lambda` now in use:
   * Pix2Vox-F wins **car at one view** (0.8848 vs UMIFormer 0.8762) and nothing
     else -- the entire measured case for its slot, on a 0.0086 margin.
   * OccNet and TripoSR won **zero of twelve** category-budget cells and were
-    dropped from the action space. `--all` scores them anyway, to re-test that.
+    dropped; their code has since been removed.
 
 Prints a per-category table per budget, then who wins where, then the crossover
 budget per category.
@@ -48,10 +48,6 @@ def main():
                    help="test models per category (keep small; this is O(cats x budgets x backbones))")
     p.add_argument("--categories", nargs="+", default=None, help="default: all 13")
     p.add_argument("--device", default="cpu")
-    p.add_argument("--all", action="store_true",
-                   help="also score backbones dropped from the action space "
-                        "(occnet, triposr) -- needed to re-test the case for "
-                        "dropping them")
     args = p.parse_args()
 
     from dataloader_shapenet import build_shapenet
@@ -59,8 +55,7 @@ def main():
     cfg = Config()
     dataset = build_shapenet(split="test", categories=args.categories,
                              limit_per_category=args.limit)
-    backbones = load_backbones(cfg, device=args.device,
-                               include_unregistered=args.all)
+    backbones = load_backbones(cfg, device=args.device)
     names = [b.name for b in backbones]
 
     # Group sample indices by category so each is scored independently.
