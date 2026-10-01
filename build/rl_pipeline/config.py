@@ -24,17 +24,8 @@ class Config:
     # the GPU box points at its own copies without editing this file.
     # A backbone whose file is missing drops out of the action space at startup.
     pix2vox_f_ckpt = os.path.join(_HERE, "..", "Pix2Vox-F-ShapeNet.pth")   # $PIX2VOX_F_CKPT
-    pix2vox_a_ckpt = os.path.join(_HERE, "..", "Pix2Vox-A-ShapeNet.pth")   # $PIX2VOX_A_CKPT
-    r2n2_ckpt      = os.path.join(_HERE, "..", "ResidualGRUNet.npy")       # $R2N2_CKPT
     umiformer_ckpt = os.path.join(_HERE, "..", "UMIFormer-ShapeNet.pth")  # $UMIFORMER_CKPT
     umiformer_plus_ckpt = os.path.join(_HERE, "..", "UMIFormerPlus-ShapeNet.pth")  # $UMIFORMER_PLUS_CKPT
-    # Directory holding TripoSR's config.yaml and model.ckpt.        # $TRIPOSR_DIR
-    triposr_dir    = os.path.join(_HERE, "..", "triposr")
-    occnet_ckpt    = os.path.join(_HERE, "..", "onet_img2mesh_3-f786b04a.pt")  # $OCCNET_CKPT
-    # sn64 is the multi-category NMR ShapeNet model — same 13 categories as the
-    # Choy data. sn64_unseen is for held-out categories, srn_* are single-category.
-    pixelnerf_ckpt = os.path.join(_HERE, "..", "pixelnerf_weights", "sn64",
-                                  "pixel_nerf_latest")                   # $PIXELNERF_CKPT
 
     # ── Environment ───────────────────────────────────────────────────────────
     n_views      = 24          # 3D-R2N2 renders 24 views per object
