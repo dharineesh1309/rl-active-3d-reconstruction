@@ -200,6 +200,7 @@ def main():
         rewards, infos = trainer.collect()
         metrics = trainer.update()
         row = {"steps": trainer.total_steps, "episodes": trainer.total_episodes,
+               "elapsed_h": (time.time() - started) / 3600,
                "reward": float(np.mean(rewards)) if rewards else None,
                **metrics, "cache": envelope.stats()}
 
