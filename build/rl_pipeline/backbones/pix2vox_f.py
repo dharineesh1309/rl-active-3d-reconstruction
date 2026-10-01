@@ -213,7 +213,7 @@ class Pix2VoxF(Backbone):
     """Pretrained Pix2Vox-F. Cheap and fast; the reference backbone."""
 
     name = "pix2vox_f"
-    cost = 0.09    # measured 0.51s / 5 views (CPU): 1.26x occnet
+    cost = 0.09    # measured 0.51s / 5 views (CPU)
 
     @staticmethod
     def _ckpt_path(cfg) -> str:
