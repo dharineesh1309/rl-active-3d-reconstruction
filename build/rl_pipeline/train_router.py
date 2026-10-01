@@ -247,7 +247,7 @@ def main():
     if not args.cv_dev:
         np.savez(out / "router.npz", classes=classes, backbones=np.array(names),
                  mu=clf[0], sd=clf[1], W=clf[2], T=T, table=table,
-                 variant=np.array(chosen))
+                 variant=np.array(chosen), set_size=views.shape[1])
     print(f"wrote {out / f'router_report_{tag}.json'}"
           + ("" if args.cv_dev else f" and {out / 'router.npz'}"))
 
