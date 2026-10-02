@@ -199,7 +199,9 @@ class RGBViewEnv:
         info = {"n_views": len(self.selected), "views": list(self.selected),
                 "category": self.item.get("category", "?"),
                 "group_key": (self.model_id, self.B)}
-        return self._obs(), reward, True, info
+        # No observation after the last view: every caller resets or stops,
+        # and building one would run ResNet on that view for nothing.
+        return None, reward, True, info
 
 
 def stack_obs(obs_list):
