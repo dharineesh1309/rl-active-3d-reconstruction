@@ -15,8 +15,12 @@ Stage 2, category -> backbone. A table of object-averaged utility per
 or under --cv-dev the other dev folds.
 
 Variants, chosen by utility on dev -- not by category accuracy:
-    argmax    the predicted category's table row
-    expected  sum_c p(c | views) * table[c], which keeps the uncertainty
+    argmax     the predicted category's table row
+    expected   sum_c p(c | views) * table[c], which keeps the uncertainty
+    corrected  expected, centred, + beta * a ridge regression of centred
+               utilities on the set features: the per-object correction.
+               alpha and beta are chosen by K-fold CV over controller_train
+               objects, never on dev.
 
 References that are not deployable: the true-category lookup (uses the label)
 and the per-view-set oracle.
@@ -118,6 +122,27 @@ def fit_table(U, obj, cat_of_row, classes, fallback):
     return tab
 
 
+RIDGE_ALPHAS = (1e2, 1e3, 1e4, 1e5, 1e6)
+BETAS = (0.0, 0.25, 0.5, 1.0, 2.0)          # 0 = no correction
+
+
+def fit_ridge(X, U, obj, alphas):
+    """Per-object correction: centred utilities on standardised set features,
+    each object weighted once. Returns (mu, sd, {alpha: W})."""
+    mu, sd = X.mean(0), X.std(0) + 1e-6
+    Z = (X - mu) / sd
+    w = 1.0 / np.bincount(obj)[obj]
+    A = Z.T @ (Z * w[:, None])
+    B = (Z * w[:, None]).T @ (U - U.mean(1, keepdims=True))
+    return mu, sd, {a: np.linalg.solve(A + a * np.eye(len(A)), B) for a in alphas}
+
+
+def corrected(scores, T, table, X, mu, sd, W, beta):
+    """The expected-table utilities, centred, plus beta * the ridge correction."""
+    P = softmax(scores, T) @ table
+    return (P - P.mean(1, keepdims=True) + beta * (((X - mu) / sd) @ W)).argmax(1)
+
+
 def route(scores, T, table, classes_idx=None):
     """{variant: picks}; with classes_idx also the true-label reference."""
     out = {"argmax": table[scores.argmax(1)].argmax(1),
@@ -168,6 +193,8 @@ def main():
     ap.add_argument("--out", default="artifacts/router")
     ap.add_argument("--cv-dev", type=int, default=0,
                     help="K: build the table by K-fold CV over dev objects")
+    ap.add_argument("--folds", type=int, default=5,
+                    help="CV folds over controller_train for the correction")
     ap.add_argument("--min-objects", type=int, default=60,
                     help="flag categories with fewer clean table objects")
     ap.add_argument("--seed", type=int, default=0)
@@ -222,19 +249,60 @@ def main():
         print("table objects per category: " + ", ".join(
             f"{c} {n}" + (" (THIN: top up)" if n < args.min_objects else "")
             for c, n in cover.items()))
+        # Choose the correction's (alpha, beta) by K-fold CV over
+        # controller_train objects -- a single held-out slice proved a lottery
+        # (one draw in five picked an over-regularised alpha) -- with the
+        # classifier, table and ridge refit without each fold. Then refit
+        # everything on all of controller_train. Dev is only scored.
+        ctrl_objs = np.unique(obj[tr])
+        folds = np.array_split(np.random.default_rng(args.seed + 1).permutation(ctrl_objs),
+                               args.folds)
+        sums = {(a, b): 0.0 for a in RIDGE_ALPHAS for b in BETAS}
+        for f in folds:
+            in_f = np.isin(obj, f)
+            r_fit, r_f = tr[~in_f[tr]], np.flatnonzero(in_f)
+            r_cls = np.flatnonzero(~is_dev[obj] & ~in_f)
+            clf_f = fit_classifier(X[r_cls], cats[obj[r_cls]], obj[r_cls], classes)
+            sv = np.array([object_mean(U[r_fit, k], obj[r_fit]) for k in range(len(names))])
+            tab_f = fit_table(U[r_fit], obj[r_fit], cats[obj[r_fit]], classes, sv)
+            fmu, fsd, Wf = fit_ridge(X[r_fit], U[r_fit], obj[r_fit], RIDGE_ALPHAS)
+            sc_f, Uf = class_scores(clf_f, X[r_f]), U[r_f]
+            for a, b in sums:
+                p = corrected(sc_f, T, tab_f, X[r_f], fmu, fsd, Wf[a], b)
+                sums[a, b] += len(f) * object_mean(Uf.max(1) - Uf[np.arange(len(Uf)), p],
+                                                   obj[r_f])
+        hold_regret = {k: v / len(ctrl_objs) for k, v in sums.items()}
+        alpha, beta = min(hold_regret, key=hold_regret.get)
+        hold = ctrl_objs
+        print(f"correction chosen by {args.folds}-fold CV over {len(ctrl_objs)} training "
+              f"objects: alpha {alpha:g}, beta {beta:g} (regret "
+              f"{hold_regret[(alpha, beta)]:.4f} vs {hold_regret[(alpha, 0.0)]:.4f} uncorrected)")
+
         single = np.array([object_mean(U[tr, k], obj[tr]) for k in range(len(names))])
         table = fit_table(U[tr], obj[tr], cats[obj[tr]], classes, single)
+        rmu, rsd, Ws = fit_ridge(X[tr], U[tr], obj[tr], (alpha,))
         picks["single"][:] = single.argmax()
         picks.update(route(sc, T, table, true_idx))
+        picks["corrected"] = corrected(sc, T, table, X[dev_rows], rmu, rsd, Ws[alpha], beta)
         table_src = f"controller_train, {len(set(obj[tr]))} objects"
         fold_ids = None
 
     res = summarise(U[dev_rows], obj[dev_rows], picks, names)
-    deployable = ("argmax", "expected")
+    deployable = [m for m in ("argmax", "expected", "corrected") if m in picks]
     chosen = max(deployable, key=lambda m: res[m]["utility"])
     print_report(f"dev, {len(set(obj[dev_rows]))} objects; table: {table_src}; "
                  f"T={T:.3g}", res, acc)
     print(f"\nselected variant (dev utility): {chosen}")
+    cve = None
+    if "corrected" in picks:
+        Ud, od = U[dev_rows], obj[dev_rows]
+        per_obj = lambda p: np.array([(Ud.max(1) - Ud[np.arange(len(Ud)), p])[od == o].mean()
+                                      for o in np.unique(od)])
+        dlt = per_obj(picks["expected"]) - per_obj(picks["corrected"])
+        bs = np.random.default_rng(args.seed).integers(len(dlt), size=(4000, len(dlt)))
+        cve = [float(dlt.mean()), *map(float, np.percentile(dlt[bs].mean(1), [2.5, 97.5]))]
+        print(f"corrected vs expected, dev regret reduction {cve[0]:+.4f} "
+              f"[95% CI {cve[1]:+.4f}, {cve[2]:+.4f}]")
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -242,11 +310,17 @@ def main():
     report = {"table_source": table_src, "variant": chosen, "temperature": T,
               "category_accuracy": acc, "backbones": names, "dev": res,
               "folds": fold_ids, "coverage": None if args.cv_dev else cover,
-              "alpha": ALPHA, "seed": args.seed}
+              "corrected_vs_expected": cve, "alpha": ALPHA, "seed": args.seed}
     (out / f"router_report_{tag}.json").write_text(json.dumps(report, indent=1))
     if not args.cv_dev:
+        report["correction"] = {"alpha": alpha, "beta": beta, "cv_folds": args.folds,
+                                "cv_objects": len(hold),
+                                "cv_regret": {f"{a:g},{b:g}": r for (a, b), r
+                                              in hold_regret.items()}}
+        (out / f"router_report_{tag}.json").write_text(json.dumps(report, indent=1))
         np.savez(out / "router.npz", classes=classes, backbones=np.array(names),
                  mu=clf[0], sd=clf[1], W=clf[2], T=T, table=table,
+                 ridge_mu=rmu, ridge_sd=rsd, ridge_W=Ws[alpha], beta=beta,
                  variant=np.array(chosen), set_size=views.shape[1])
     print(f"wrote {out / f'router_report_{tag}.json'}"
           + ("" if args.cv_dev else f" and {out / 'router.npz'}"))
