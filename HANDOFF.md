@@ -31,7 +31,7 @@ router picks the backbone. STOP is an optional extension, gated on a pilot.
 | 2 | router from that run's cache; top up thin categories | **done**: `artifacts/router/router.npz`; no category thin (min 92) |
 | 3 | dev evaluation matrix + latency + lambda sensitivity (spec below) | **done**: `artifacts/phase3/eval_dev.json` (results below) |
 | 4 | STOP pilot (optional) | **skipped** for scope: variable-budget acquisition remains untested |
-| 5 | freeze, run `final_test` once, rewrite report | |
+| 5 | freeze, run `final_test` once, rewrite report | **pre-registered** (`artifacts/final/preregistration.json`, unmodified, + dated `preregistration_amendment_1.json`, code build 698bc1c); collection job ready (`build/kaggle_final_cell.py`); the evaluator refuses unless every registered hash and setting matches |
 
 **Protocol** (`build/rl_pipeline/configs/splits_v1.json`, built by `splits.py`,
 refuses to overwrite). The official split only says what the reconstructors
