@@ -29,7 +29,7 @@ router picks the backbone. STOP is an optional extension, gated on a pilot.
 | 0 | freeze splits, cache v2, cost definition, router code, resume, RGB inference | **substantially done**: CUDA resume and legacy-label verification run as gates at the start of Phase 1; `router.npz` is a Phase 2 output |
 | 1 | retrain `set_pose` on `controller_train` (Kaggle), select checkpoints on dev | **done**: selected `set_pose_s164864` (`artifacts/tier1/selection.json`) |
 | 2 | router from that run's cache; top up thin categories | **done**: `artifacts/router/router.npz`; no category thin (min 92) |
-| 3 | dev evaluation matrix + latency + lambda sensitivity (spec below) | next |
+| 3 | dev evaluation matrix + latency + lambda sensitivity (spec below) | **done**: `artifacts/phase3/eval_dev.json` (results below) |
 | 4 | STOP pilot (optional) | |
 | 5 | freeze, run `final_test` once, rewrite report | |
 
@@ -180,6 +180,49 @@ within objects, every view-set list frozen before scoring):
   *frozen-system* -- the decisions fixed, rescored at each lambda; *adaptive* --
   the table, ridge and their CV rebuilt from training labels at each lambda.
   The view policy stays fixed in both.
+
+**Phase 3 results** (dev, 309 objects; `phase3_eval.py`; 2,000-rep stratified
+joint bootstrap; baseline random views + always UMIFormer+):
+
+| pipeline | IoU | v1 utility vs base [95% CI] | CPU-measured util (est.) vs base | GPU s |
+|---|---|---|---|---|
+| random + pix2vox_f | 0.672 | -0.0340 [-0.0458, -0.0228] | +0.0182 [+0.0045, +0.0324] | 0.044 |
+| heuristic + pix2vox_f | 0.675 | -0.0303 | **+0.0219 [+0.0080, +0.0364]** | 0.044 |
+| heuristic + umiformer_plus | 0.773 | +0.0082 [+0.0053, +0.0114] | +0.0082 | 0.193 |
+| policy + umiformer_plus | 0.776 | +0.0109 [+0.0081, +0.0136] | -0.0184 | 0.241 |
+| heuristic + router_corrected | 0.766 | +0.0137 [+0.0100, +0.0177] | -0.0085 | 0.204 |
+| **policy + router_corrected** | 0.770 | **+0.0178 [+0.0141, +0.0216]** | -0.0067 [-0.0120, -0.0015] | 0.216 |
+| policy + oracle (reference) | 0.784 | +0.0414 | -- | -- |
+
+Findings:
+* **Backbone-only, the full system wins**: policy + corrected router is the
+  best deployable pipeline.
+* **The farthest-angle heuristic carries most of the view gain.** With
+  UMIFormer+: random 0, heuristic +0.0082, policy +0.0109. Policy - heuristic
+  is significant only with a router (+0.0041 [+0.0008, +0.0071] corrected;
+  +0.0040 plain); with fixed backbones +0.0007 to +0.0027, intervals span 0.
+* **Corrected - plain router**: +0.0035 [+0.0015, +0.0057] on random views;
+  +0.0027/+0.0028 with lower bound 0.0000 on heuristic/policy views.
+* **CPU-measured, the controller does not pay for itself.** ResNet features
+  cost ~0.4 s per object (5 x 95 ms on this run), worth ~0.03 utility -- more
+  than the routing gain. Every router/policy pipeline is negative; the best
+  are the controller-free Pix2Vox-F pipelines, because measured CPU backbone
+  times (Pix2Vox-F 0.68 s, UMIFormer+ 2.12 s) make UMIFormer+ far dearer than
+  cost v1 declares (gap 1.45 s measured vs 0.77 s declared).
+* **CPU timing is not stable**: this benchmark ran ~1.3x slower than earlier
+  ones on the same machine (ResNet 95 vs 63 ms). Measured utility differences
+  scale with the slowdown. At the earlier timings the Pix2Vox-F/UMIFormer+
+  trade-off is close to break-even (IoU gap 0.093 vs 1.19 s x 0.0771 = 0.092),
+  so the measured-utility ranking of those two is hardware-state dependent;
+  the controller-overhead conclusion is not (~0.3-0.4 s at any observed speed).
+* The cost estimate matches the cohort's measured end-to-end totals within
+  3.3% (15 pipelines); policy and heuristic reproduced every frozen episode on
+  CPU and GPU.
+* **Lambda**: with decisions frozen, routing gains grow with lambda (the
+  router picks Pix2Vox-F more). Rebuilt per lambda (adaptive), the router adds
+  ~nothing over policy + UMIFormer+ at lambda 0-0.04 (+0.011 both): its value
+  is the cost trade-off, not quality routing. The training-best single
+  backbone flips to Pix2Vox-F at lambda >= 0.15.
 
 **Checkpoint selection** (`score_routed.py`, refinement 5): with the router,
 every checkpoint's dev view sets score within noise (routed 0.6832-0.6843);
