@@ -54,29 +54,38 @@ def object_mean(x, obj):
     return float((np.bincount(obj, weights=x)[has] / cnt[has]).mean())
 
 
-def load(feats_path, cache_path):
-    """Rows of every cached view set whose object has features."""
-    from backbones import _candidates
-    from config import Config
-    from training.utility_envelope import load_cache, utilities
+def load_iou(feats_path, cache_path):
+    """Rows of every cached view set whose object has features: raw IoU."""
+    from training.utility_envelope import load_cache
 
     d = np.load(feats_path)
     idx = {m: i for i, m in enumerate(d["model_id"])}
-    costs = {c.name: c.cost for c in _candidates()}
-    lam = Config().cost_lambda
     iou = load_cache(cache_path)["iou"]
     names = sorted(next(iter(iou.values())))
-    obj, views, U = [], [], []
+    obj, views, I = [], [], []
     for k, v in iou.items():
         m, s = k.split("|")
         if m in idx:
-            u = utilities(v, lam, costs)
             obj.append(idx[m])
             views.append([int(x) for x in s.split(",")])
-            U.append([u[n] for n in names])
+            I.append([v[n] for n in names])
     views = np.array(views)
     assert views.ndim == 2, "view sets of different sizes; route them per size"
-    return d, names, np.array(obj), views, np.array(U)
+    return d, names, np.array(obj), views, np.array(I)
+
+
+def costs_of(names):
+    from backbones import _candidates
+    c = {k.name: k.cost for k in _candidates()}
+    return np.array([c[n] for n in names])
+
+
+def load(feats_path, cache_path):
+    """As load_iou, as utilities IoU - lambda * cost at the configured lambda."""
+    from config import Config
+
+    d, names, obj, views, I = load_iou(feats_path, cache_path)
+    return d, names, obj, views, I - Config().cost_lambda * costs_of(names)
 
 
 def set_features(F, obj, views):
@@ -159,6 +168,55 @@ def corrected(scores, T, table, X, mu, sd, W, beta):
     return (P - P.mean(1, keepdims=True) + beta * (((X - mu) / sd) @ W)).argmax(1)
 
 
+def cv_folds(obj, tr, n, seed):
+    """K folds over the objects of rows `tr`."""
+    objs = np.unique(obj[tr])
+    return objs, np.array_split(np.random.default_rng(seed + 1).permutation(objs), n)
+
+
+def fold_classifiers(X, cats, obj, allowed, folds, classes, seed):
+    """Stage 1 refit without each fold, on `allowed` objects only (training
+    splits -- never dev or final_test). Category labels do not depend on
+    lambda, so these are computed once and reused for every lambda."""
+    out = []
+    for f in folds:
+        in_f = np.isin(obj, f)
+        r_cls = np.flatnonzero(allowed[obj] & ~in_f)
+        out.append((f, in_f, *fit_stage1(X, cats, obj, r_cls, classes, seed)))
+    return out
+
+
+def fit_router(X, U, obj, cats, classes, tr, fold_clfs):
+    """
+    The utility-dependent half of the router, from rows `tr`: the per-category
+    table and the ridge correction, with (alpha, beta) chosen by K-fold CV over
+    `tr`'s objects -- table and ridge refit without each fold, alongside that
+    fold's stage-1 classifier and temperature. Everything is then refit on all
+    of `tr`.
+    """
+    K = U.shape[1]
+    sums = {(a, b): 0.0 for a in RIDGE_ALPHAS for b in BETAS}
+    n_objs = 0
+    for f, in_f, clf_f, T_f in fold_clfs:
+        r_fit, r_f = tr[~in_f[tr]], np.flatnonzero(in_f)
+        sv = np.array([object_mean(U[r_fit, k], obj[r_fit]) for k in range(K)])
+        tab_f = fit_table(U[r_fit], obj[r_fit], cats[obj[r_fit]], classes, sv)
+        fmu, fsd, Wf = fit_ridge(X[r_fit], U[r_fit], obj[r_fit], RIDGE_ALPHAS)
+        sc_f, Uf = class_scores(clf_f, X[r_f]), U[r_f]
+        for a, b in sums:
+            p = corrected(sc_f, T_f, tab_f, X[r_f], fmu, fsd, Wf[a], b)
+            sums[a, b] += len(f) * object_mean(Uf.max(1) - Uf[np.arange(len(Uf)), p],
+                                               obj[r_f])
+        n_objs += len(f)
+    cv = {k: v / n_objs for k, v in sums.items()}
+    alpha, beta = min(cv, key=cv.get)
+    single = np.array([object_mean(U[tr, k], obj[tr]) for k in range(K)])
+    table = fit_table(U[tr], obj[tr], cats[obj[tr]], classes, single)
+    rmu, rsd, Ws = fit_ridge(X[tr], U[tr], obj[tr], (alpha,))
+    return {"single": single, "table": table, "alpha": alpha, "beta": beta,
+            "ridge_mu": rmu, "ridge_sd": rsd, "ridge_W": Ws[alpha], "cv_regret": cv}
+
+
 def route(scores, T, table, classes_idx=None):
     """{variant: picks}; with classes_idx also the true-label reference."""
     out = {"argmax": table[scores.argmax(1)].argmax(1),
@@ -227,10 +285,12 @@ def main():
     in_ = lambda key: np.array([m in S[key] for m in mids])
     is_dev, is_final, is_ctrl = in_("dev"), in_("final_test"), in_("controller_train")
     assert not is_final.any(), "final_test objects in the router data"
+    # Training objects, named explicitly rather than "everything outside dev".
+    allowed = is_ctrl | in_("classifier_train")
     X = set_features(d["feats"], obj, views)
 
-    # Stage 1 on everything labelled outside dev.
-    clf, T = fit_stage1(X, cats, obj, np.flatnonzero(~is_dev[obj]), classes, args.seed)
+    # Stage 1 on every training object.
+    clf, T = fit_stage1(X, cats, obj, np.flatnonzero(allowed[obj]), classes, args.seed)
 
     # The dev view sets scored are frozen on first use: later cache additions
     # (heuristic or policy evaluations) must not change the population.
@@ -283,34 +343,17 @@ def main():
         # (one draw in five picked an over-regularised alpha) -- with the
         # classifier, table and ridge refit without each fold. Then refit
         # everything on all of controller_train. Dev is only scored.
-        ctrl_objs = np.unique(obj[tr])
-        folds = np.array_split(np.random.default_rng(args.seed + 1).permutation(ctrl_objs),
-                               args.folds)
-        sums = {(a, b): 0.0 for a in RIDGE_ALPHAS for b in BETAS}
-        for f in folds:
-            in_f = np.isin(obj, f)
-            r_fit, r_f = tr[~in_f[tr]], np.flatnonzero(in_f)
-            r_cls = np.flatnonzero(~is_dev[obj] & ~in_f)
-            clf_f, T_f = fit_stage1(X, cats, obj, r_cls, classes, args.seed)
-            sv = np.array([object_mean(U[r_fit, k], obj[r_fit]) for k in range(len(names))])
-            tab_f = fit_table(U[r_fit], obj[r_fit], cats[obj[r_fit]], classes, sv)
-            fmu, fsd, Wf = fit_ridge(X[r_fit], U[r_fit], obj[r_fit], RIDGE_ALPHAS)
-            sc_f, Uf = class_scores(clf_f, X[r_f]), U[r_f]
-            for a, b in sums:
-                p = corrected(sc_f, T_f, tab_f, X[r_f], fmu, fsd, Wf[a], b)
-                sums[a, b] += len(f) * object_mean(Uf.max(1) - Uf[np.arange(len(Uf)), p],
-                                                   obj[r_f])
-        hold_regret = {k: v / len(ctrl_objs) for k, v in sums.items()}
-        alpha, beta = min(hold_regret, key=hold_regret.get)
-        hold = ctrl_objs
-        print(f"correction chosen by {args.folds}-fold CV over {len(ctrl_objs)} training "
+        hold, folds = cv_folds(obj, tr, args.folds, args.seed)
+        fit = fit_router(X, U, obj, cats, classes, tr,
+                         fold_classifiers(X, cats, obj, allowed, folds, classes, args.seed))
+        alpha, beta, hold_regret = fit["alpha"], fit["beta"], fit["cv_regret"]
+        table, rmu, rsd = fit["table"], fit["ridge_mu"], fit["ridge_sd"]
+        Ws = {alpha: fit["ridge_W"]}
+        print(f"correction chosen by {args.folds}-fold CV over {len(hold)} training "
               f"objects: alpha {alpha:g}, beta {beta:g} (regret "
               f"{hold_regret[(alpha, beta)]:.4f} vs {hold_regret[(alpha, 0.0)]:.4f} uncorrected)")
 
-        single = np.array([object_mean(U[tr, k], obj[tr]) for k in range(len(names))])
-        table = fit_table(U[tr], obj[tr], cats[obj[tr]], classes, single)
-        rmu, rsd, Ws = fit_ridge(X[tr], U[tr], obj[tr], (alpha,))
-        picks["single"][:] = single.argmax()
+        picks["single"][:] = fit["single"].argmax()
         picks.update(route(sc, T, table, true_idx))
         picks["corrected"] = corrected(sc, T, table, X[dev_rows], rmu, rsd, Ws[alpha], beta)
         table_src = f"controller_train, {len(set(obj[tr]))} objects"
