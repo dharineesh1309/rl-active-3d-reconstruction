@@ -158,6 +158,13 @@ within objects, every view-set list frozen before scoring):
   controller overhead; shared ResNet features counted once; CPU and GPU
   measured separately; model loading stated explicitly (excluded from the
   per-object figure, reported on its own).
+* two separate utility accountings, never mixed: **frozen cost v1** (declared
+  backbone prices, backbone-only) and **fully measured** (IoU - lambda x the
+  measured backbone + controller seconds of the same benchmark run).
+  `bench_latency.py` times complete pipelines on a fixed 26-object cohort with
+  24 candidates and keeps every raw measurement. Heuristic + router still pays
+  ResNet (~0.32 s CPU); only heuristic + a fixed backbone is nearly free. The
+  first CPU run used 10 candidates (local mirror) and was discarded.
 * lambda sensitivity, both kinds, from raw IoU (no new reconstructions):
   *frozen-system* -- the decisions fixed, rescored at each lambda; *adaptive* --
   the table, ridge and their CV rebuilt from training labels at each lambda.
