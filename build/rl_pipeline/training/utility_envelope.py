@@ -172,8 +172,13 @@ class UtilityEnvelope:
         # UMIFormer draws torch.rand at inference. Forked and reseeded, so the
         # backbones never advance the policy's RNG stream -- otherwise whether a
         # view set happened to be cached would change the policy's sampling.
-        with torch.random.fork_rng():
-            torch.manual_seed(0)
+        # Only the device in use: Kaggle exposes two GPUs, and forking every one
+        # on each miss is slow and warns.
+        devs = [torch.cuda.current_device()] if torch.cuda.is_available() else []
+        with torch.random.fork_rng(devices=devs):
+            torch.default_generator.manual_seed(0)       # exactly what was forked:
+            if devs:                                     # CPU + the current GPU
+                torch.cuda.manual_seed(0)
             for b in self.backbones:
                 pred = b.predict(imgs, cams)
                 out[b.name] = float(voxel_iou(pred, item["voxels"],
