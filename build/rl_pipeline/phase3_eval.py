@@ -97,6 +97,65 @@ def validate(frozen_doc, expected, lat_cpu, lat_gpu, cohort):
             raise SystemExit(f"{dev_kind} latency run is missing pipelines or episodes")
 
 
+def _sha(p):
+    return hashlib.sha256(Path(p).read_bytes()).hexdigest()
+
+
+def check_registration(args, frozen_doc, cache_meta, lam, costs):
+    """
+    Final test only: the pre-registration, with its dated amendments applied
+    in order, must match everything this evaluation uses -- or nothing is
+    printed. Returns the registration's identity for the result file.
+    """
+    from splits import DEFAULT as SPLITS_PATH
+    from training.utility_envelope import DEFAULT_THRESHOLDS, SCORING
+
+    path = Path(args.prereg)
+    reg = json.load(open(path))
+    ident = {"preregistration": path.name, "sha256": _sha(path), "amendments": []}
+    for a in sorted(path.parent.glob("preregistration_amendment_*.json")):
+        am = json.load(open(a))
+        for key, value in am["changes"].items():
+            node = reg
+            *parents, leaf = key.split(".")
+            for k in parents:
+                node = node[k]
+            node[leaf] = value
+        ident["amendments"].append({"file": a.name, "sha256": _sha(a), "date": am["date"]})
+
+    A = reg["artifacts"]
+    problems = []
+    def need(ok, what):
+        if not ok:
+            problems.append(what)
+    need(_sha(SPLITS_PATH) == reg["split"]["sha256"], "split manifest")
+    for arg, key in ((args.router, "router"), (args.adaptive_routers, "adaptive_routers"),
+                     (args.latency_cpu, "cpu_timing_profile"),
+                     (args.latency_gpu, "gpu_timing_profile")):
+        need(_sha(arg) == A[key]["sha256"], key)
+    need(frozen_doc.get("policy_sha256") == A["policy"]["sha256"], "collected policy")
+    need(frozen_doc.get("seed") == reg["sampling"]["seed"], "sampling seed")
+    need(frozen_doc.get("code") == reg["code_build"], "collection code build")
+    need(abs(lam - A["cost_v1"]["lambda_per_cpu_s"]) < 1e-12, "lambda")
+    need(costs == A["cost_v1"]["costs_cpu_s"], "cost v1")
+    need(DEFAULT_THRESHOLDS == A["thresholds"], "thresholds")
+    need(SCORING == A["scoring"], "scoring version")
+    runs = [r for r in cache_meta["runs"].values() if r.get("script") == "final_collect"]
+    need(bool(runs) and all(r.get("checkpoints") == A["backbone_checkpoints"]
+                            and r.get("code") == reg["code_build"] for r in runs),
+         "final collection's backbone checkpoints / code build")
+    marker = Path(args.views).with_name("collection_complete.json")
+    need(marker.is_file(), "collection completion marker")
+    if marker.is_file():
+        mk = json.load(open(marker))
+        need(mk["views_sha256"] == _sha(args.views) and
+             mk["feats_sha256"] == _sha(args.eval_feats), "collected files vs their marker")
+    if problems:
+        raise SystemExit("final evaluation refused; does not match the pre-registration: "
+                         + ", ".join(problems))
+    return ident
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--split", choices=["dev", "final_test"], default="dev")
@@ -108,6 +167,8 @@ def main():
                     help="final_test: the final objects' features, kept apart from training")
     ap.add_argument("--adaptive-routers", default="artifacts/phase3/adaptive_routers.npz",
                     help="dev writes the per-lambda routers here; final_test only reads them")
+    ap.add_argument("--prereg", default="artifacts/final/preregistration.json",
+                    help="final_test: enforced, with its dated amendments")
     ap.add_argument("--router", default="artifacts/router/router.npz")
     ap.add_argument("--latency-cpu", default="artifacts/phase3/latency_cpu.json")
     ap.add_argument("--latency-gpu", default="artifacts/phase3/latency_gpu.json")
@@ -134,10 +195,14 @@ def main():
     if final and not args.eval_feats:
         raise SystemExit("final_test needs --eval-feats (the final objects' features)")
     frozen = frozen_doc["views"]
-    cache = load_cache(args.cache)["iou"]
+    cache_doc = load_cache(args.cache)
+    cache = cache_doc["iou"]
     names = sorted(next(iter(cache.values())))
     assert tuple(names) == FIXED
     cost = costs_of(names)
+    registration = (check_registration(args, frozen_doc, cache_doc["meta"], lam,
+                                       dict(zip(names, map(float, cost))))
+                    if final else None)
     R = np.load(args.router)
     d = np.load(args.eval_feats if final else args.feats)
     F, cats_all = d["feats"], d["category"]
@@ -265,10 +330,15 @@ def main():
         point = (cpu_util(*a, ones, ones_c) - cpu_util(*b, ones, ones_c))[0]
         return interval(reps, point)
 
-    report = {"objects": n_obj, "lambda": lam, "backbones": names,
-              "baseline": "+".join(BASE), "bootstrap": {"reps": B, "kind":
-              "stratified: 26 timing-cohort objects and 283 others; shared weights"},
-              "pipelines": {}}
+    scheme = ("stratified over dev: the 26 timing-cohort objects and the other "
+              f"{n_obj - len(cohort)} resampled separately; one set of weights drives "
+              "quality, routing and timing, shared by every pipeline"
+              if not final else
+              f"final objects ({n_obj}) resampled; the dev timing cohort ({len(cohort)}, "
+              "disjoint) resampled independently; both weight sets shared by every pipeline")
+    report = {"split": args.split, "objects": n_obj, "lambda": lam, "backbones": names,
+              "baseline": "+".join(BASE), "registration": registration,
+              "bootstrap": {"reps": B, "seed": 0, "scheme": scheme}, "pipelines": {}}
     print(f"{args.split}, {n_obj} objects; lambda {lam}; baseline {'+'.join(BASE)}; {B} joint "
           "bootstrap reps")
     print(f"  {'pipeline':<28}{'IoU':>7}{'util v1':>9}  {'v1 - base [95% CI]':<28}"
