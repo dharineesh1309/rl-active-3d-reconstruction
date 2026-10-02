@@ -75,10 +75,11 @@ def interval(reps, point):
     return [float(point), float(lo), float(hi)]
 
 
-def validate(frozen_doc, dev, lat_cpu, lat_gpu, cohort):
+def validate(frozen_doc, expected, lat_cpu, lat_gpu, cohort):
     views = frozen_doc["views"]
-    if set(views) != set(dev) or len(views) != 309:
-        raise SystemExit("frozen views do not cover exactly the 309 dev objects")
+    if set(views) != set(expected):
+        raise SystemExit(f"frozen views cover {len(views)} objects, not exactly the "
+                         f"{len(expected)} of the evaluated split")
     h = hashlib.sha256(json.dumps(views, sort_keys=True).encode()).hexdigest()
     if h != frozen_doc["sha256"]:
         raise SystemExit("frozen views do not match their recorded hash")
@@ -98,9 +99,15 @@ def validate(frozen_doc, dev, lat_cpu, lat_gpu, cohort):
 
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument("--split", choices=["dev", "final_test"], default="dev")
     ap.add_argument("--views", default="artifacts/phase3/views_dev.json")
     ap.add_argument("--cache", default="cache/utility_cache.json")
-    ap.add_argument("--feats", default="artifacts/router/feats.npz")
+    ap.add_argument("--feats", default="artifacts/router/feats.npz",
+                    help="training features (dev: also the evaluated objects')")
+    ap.add_argument("--eval-feats", default=None,
+                    help="final_test: the final objects' features, kept apart from training")
+    ap.add_argument("--adaptive-routers", default="artifacts/phase3/adaptive_routers.npz",
+                    help="dev writes the per-lambda routers here; final_test only reads them")
     ap.add_argument("--router", default="artifacts/router/router.npz")
     ap.add_argument("--latency-cpu", default="artifacts/phase3/latency_cpu.json")
     ap.add_argument("--latency-gpu", default="artifacts/phase3/latency_gpu.json")
@@ -122,14 +129,17 @@ def main():
     frozen_doc = json.load(open(args.views))
     Lc, Lg = json.load(open(args.latency_cpu)), json.load(open(args.latency_gpu))
     cohort = bench_cohort()
-    validate(frozen_doc, S["dev"], Lc, Lg, cohort)
+    final = args.split == "final_test"
+    validate(frozen_doc, S[args.split], Lc, Lg, cohort)
+    if final and not args.eval_feats:
+        raise SystemExit("final_test needs --eval-feats (the final objects' features)")
     frozen = frozen_doc["views"]
     cache = load_cache(args.cache)["iou"]
     names = sorted(next(iter(cache.values())))
     assert tuple(names) == FIXED
     cost = costs_of(names)
     R = np.load(args.router)
-    d = np.load(args.feats)
+    d = np.load(args.eval_feats if final else args.feats)
     F, cats_all = d["feats"], d["category"]
     idx = {m: i for i, m in enumerate(d["model_id"])}
     classes = R["classes"]
@@ -180,17 +190,28 @@ def main():
 
     P = per_pipeline(lam, dec)
 
-    # ── stratified bootstrap weights over dev objects, shared by everything ──
+    # ── bootstrap weights, shared by every pipeline so contrasts stay paired ──
     rng = np.random.default_rng(0)
-    pos = {m: i for i, m in enumerate(objs)}
-    c_idx = np.array([pos[m] for m in cohort])
-    rest = np.setdiff1d(np.arange(n_obj), c_idx)
     B = args.boot
     W = np.zeros((B, n_obj))
-    for b in range(B):
-        np.add.at(W[b], rng.choice(c_idx, len(c_idx)), 1)
-        np.add.at(W[b], rng.choice(rest, len(rest)), 1)
-    Wc = W[:, c_idx]                                    # the same draws, cohort part
+    if not final:
+        # Dev: the 26 timing-cohort objects ARE dev objects -- stratified, and
+        # one set of weights drives their quality, routing and timing.
+        pos = {m: i for i, m in enumerate(objs)}
+        c_idx = np.array([pos[m] for m in cohort])
+        rest = np.setdiff1d(np.arange(n_obj), c_idx)
+        for b in range(B):
+            np.add.at(W[b], rng.choice(c_idx, len(c_idx)), 1)
+            np.add.at(W[b], rng.choice(rest, len(rest)), 1)
+        Wc = W[:, c_idx]
+    else:
+        # Final: the timing cohort (dev objects) is disjoint from the final
+        # objects, so its uncertainty is resampled independently.
+        for b in range(B):
+            np.add.at(W[b], rng.integers(n_obj, size=n_obj), 1)
+        Wc = np.zeros((B, len(cohort)))
+        for b in range(B):
+            np.add.at(Wc[b], rng.integers(len(cohort), size=len(cohort)), 1)
     ones = np.ones((1, n_obj))
 
     # ── timings, per cohort object ──
@@ -215,10 +236,23 @@ def main():
         bm = (Wt @ bb) / Wt.sum(1)[:, None]             # (reps, 3)
         return cm[:, None] + bm @ P[s, c]["share"].T
 
-    def cpu_util(s, c, Wd, Wt):
-        """(reps,): weighted mean CPU-measured utility."""
-        u = P[s, c]["iou"][None] - lam * seconds(ctrl_c, bb_c, s, c, Wt)
+    def cpu_util(s, c, Wd, Wt, k=1.0):
+        """(reps,): weighted mean CPU-measured utility; k scales every timing."""
+        u = P[s, c]["iou"][None] - lam * k * seconds(ctrl_c, bb_c, s, c, Wt)
         return (u * Wd).sum(1) / Wd.sum(1)
+
+    # The cohort's directly measured end-to-end totals, per pipeline and object:
+    # the alternative to composing components, for the sensitivity check.
+    cpos = {m: i for i, m in enumerate(cohort)}
+    tot_c = {(s, c): per_object(
+        np.array([p["total_s"] for p in Lc["raw"]["paths"]
+                  if p["strategy"] == s and p["choice"] == c]),
+        np.array([cpos[p["object"]] for p in Lc["raw"]["paths"]
+                  if p["strategy"] == s and p["choice"] == c]), len(cohort))
+        for s in STRATS for c in DEPLOY}
+
+    def cpu_util_totals(s, c, Wd, Wt):
+        return wmean(Wd, P[s, c]["iou"]) - lam * wmean(Wt, tot_c[s, c])
 
     ones_c = np.ones((1, len(cohort)))
 
@@ -235,7 +269,7 @@ def main():
               "baseline": "+".join(BASE), "bootstrap": {"reps": B, "kind":
               "stratified: 26 timing-cohort objects and 283 others; shared weights"},
               "pipelines": {}}
-    print(f"dev, {n_obj} objects; lambda {lam}; baseline {'+'.join(BASE)}; {B} joint "
+    print(f"{args.split}, {n_obj} objects; lambda {lam}; baseline {'+'.join(BASE)}; {B} joint "
           "bootstrap reps")
     print(f"  {'pipeline':<28}{'IoU':>7}{'util v1':>9}  {'v1 - base [95% CI]':<28}"
           f"{'CPU util*':>10}  {'CPU - base [95% CI]':<28}{'CPU s':>7}{'GPU s':>7}")
@@ -295,6 +329,33 @@ def main():
     report["latency_files"] = {k: {f: L[f] for f in ("device_name", "threads", "torch")}
                                for k, L in (("cpu", Lc), ("gpu", Lg))}
 
+    # ── CPU-utility sensitivity to the timing model and the machine's state ──
+    # The intervals above are conditional on the component timing model and on
+    # one benchmark session. Two checks: the cohort's directly measured
+    # pipeline totals instead of composed components, and every timing scaled
+    # by k (earlier sessions on this machine ran ~0.77x this one's times).
+    key_con = [(("policy", "router_corrected"), BASE), (("heuristic", "pix2vox_f"), BASE),
+               (("heuristic", "umiformer_plus"), BASE),
+               (("heuristic", "umiformer_plus"), ("policy", "router_corrected")),
+               (("policy", "router_corrected"), ("heuristic", "router_corrected"))]
+    tsens = {}
+    print("\nCPU utility sensitivity  (point [95% CI])")
+    print(f"  {'contrast':<56}{'pipeline totals':<30}" + "".join(
+        f"{'k=' + str(k):<30}" for k in (0.75, 1.25)))
+    for a, b in key_con:
+        name = f"{'+'.join(a)} - {'+'.join(b)}"
+        row = {"pipeline_totals": interval(
+            cpu_util_totals(*a, W, Wc) - cpu_util_totals(*b, W, Wc),
+            (cpu_util_totals(*a, ones, ones_c) - cpu_util_totals(*b, ones, ones_c))[0])}
+        for k in (0.75, 1.0, 1.25):
+            row[f"k={k}"] = interval(cpu_util(*a, W, Wc, k) - cpu_util(*b, W, Wc, k),
+                                     (cpu_util(*a, ones, ones_c, k)
+                                      - cpu_util(*b, ones, ones_c, k))[0])
+        tsens[name] = row
+        print(f"  {name:<56}" + "".join("{0:+.4f} [{1:+.4f}, {2:+.4f}]   ".format(*row[f])
+                                        for f in ("pipeline_totals", "k=0.75", "k=1.25")))
+    report["cpu_timing_sensitivity"] = tsens
+
     # ── lambda sensitivity, common baseline and absolute ──
     keyp = [("policy", "router_corrected"), ("policy", "router_plain"),
             ("heuristic", "router_corrected"), ("policy", "umiformer_plus"),
@@ -312,7 +373,17 @@ def main():
     sens = {"frozen": {}, "adaptive": {}}
     for lmb in LAMBDAS:
         sens["frozen"][f"{lmb:g}"] = curve(lmb, dec)[1]
-    if not args.no_adaptive:
+    if final:
+        # Frozen per-lambda routers from the dev run; nothing is refit here.
+        AR = np.load(args.adaptive_routers)
+        for lmb in LAMBDAS:
+            g = lambda f: AR[f"{lmb:g}/{f}"]
+            t, row = curve(lmb, decisions(g("table"), g("ridge_mu"), g("ridge_sd"),
+                                          g("ridge_W"), float(g("beta"))))
+            row["best_single_on_training"] = str(g("single"))
+            sens["adaptive"][f"{lmb:g}"] = row
+    elif not args.no_adaptive:
+        saved = {}
         dd, nm, obj, views, It = load_iou(args.feats, args.cache)
         assert tuple(nm) == FIXED
         mids, cats = dd["model_id"], dd["category"]
@@ -332,8 +403,13 @@ def main():
             row["best_single_on_training"] = single
             row["alpha"], row["beta"] = fit["alpha"], fit["beta"]
             sens["adaptive"][f"{lmb:g}"] = row
+            for f in ("table", "ridge_mu", "ridge_sd", "ridge_W", "beta", "alpha"):
+                saved[f"{lmb:g}/{f}"] = fit[f]
+            saved[f"{lmb:g}/single"] = np.array(single)
             print(f"  adaptive lambda {lmb:g}: training-best single {single}, "
                   f"alpha {fit['alpha']:g}, beta {fit['beta']:g}", flush=True)
+        np.savez(args.adaptive_routers, **saved)
+        print(f"froze the per-lambda routers in {args.adaptive_routers}")
     report["lambda_sensitivity"] = sens
     for kind, rows in sens.items():
         if not rows:
