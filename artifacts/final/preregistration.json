@@ -1,0 +1,119 @@
+{
+ "frozen_on": "2026-10-03",
+ "status": "written and committed before any final_test reconstruction or score exists",
+ "code_build": "b9d9c66",
+ "split": {
+  "manifest": "build/rl_pipeline/configs/splits_v1.json",
+  "sha256": "572f432af5a782fe55ca9504187259f835d866008b4e1b7bb0369b763487d919",
+  "final_test_objects": 312
+ },
+ "artifacts": {
+  "policy": {
+   "file": "artifacts/tier1/set_pose_s164864.pt",
+   "selected_as": "clean_s164864",
+   "sha256": "84d66f32d8f4878e3b198607773c087c26c7ec054c3a6b59eb66980e2b6937f2"
+  },
+  "router": {
+   "file": "artifacts/router/router.npz",
+   "variant": "corrected",
+   "sha256": "c3a2333b87f15354d05343960b4453580666eea60c2ad1168993eabeca525eb3"
+  },
+  "adaptive_routers": {
+   "file": "artifacts/phase3/adaptive_routers.npz",
+   "sha256": "67a13b8a4ce8716b2292287f62b442c2fb39b2621f77b0233e0063b32f4fcd0c",
+   "use": "exploratory lambda sensitivity only; never refit on final"
+  },
+  "backbone_checkpoints": {
+   "pix2vox_f": "sha256:44b1c0f1fb1c2441e76c5d87a5ac512e94395211bedd35ff8bf2ac1f1c33e9a6",
+   "umiformer": "sha256:1e2e159907c4fc2b7c38fd26276e2dd7257943bd611163756746d02cb048dda2",
+   "umiformer_plus": "sha256:9ece280658c4cc6d98474f31c9c8eb14be393bef36435f5189e3dc993ca56cca"
+  },
+  "thresholds": {
+   "pix2vox_f": 0.4,
+   "umiformer": 0.4,
+   "umiformer_plus": 0.4
+  },
+  "scoring": "v1: voxel_iou(pred > frozen threshold, gt > 0.5) at 32^3; backbone preprocessing as of 2026-10-01",
+  "cost_v1": {
+   "costs_cpu_s": {
+    "pix2vox_f": 0.51,
+    "umiformer": 1.28,
+    "umiformer_plus": 1.28
+   },
+   "lambda_per_cpu_s": 0.0771
+  },
+  "cpu_timing_profile": {
+   "file": "artifacts/phase3/latency_cpu.json",
+   "sha256": "b9c3a0e04b654566ecbb7b663a86f517df8e09211e9e7422246d525b8faad7e2"
+  },
+  "gpu_timing_profile": {
+   "file": "artifacts/phase3/latency_gpu.json",
+   "sha256": "d109104e0a6bd3d21184739b9de96d6f4d9d1d0f5d5567917119096ce1838a59"
+  }
+ },
+ "sampling": {
+  "procedure": "build/rl_pipeline/final_collect.py",
+  "seed": 2026,
+  "starts_per_object": 4,
+  "random_five_view_sets_per_object": 24,
+  "strategies": [
+   "random",
+   "heuristic (farthest-angle)",
+   "policy"
+  ],
+  "features": "final objects' features in a separate file, never a training input"
+ },
+ "primary": {
+  "comparison": "policy + router_corrected  vs  random + umiformer_plus",
+  "metric": "backbone-only utility, cost v1 (IoU - 0.0771 x declared CPU seconds)",
+  "test": "object-level paired bootstrap, 2000 reps, seed 0, 95% percentile interval",
+  "claim": "improvement if the interval lies above 0; reported whatever the outcome"
+ },
+ "secondary": [
+  {
+   "comparison": "policy + router_corrected vs heuristic + umiformer_plus",
+   "metrics": [
+    "v1",
+    "cpu_estimated"
+   ]
+  },
+  {
+   "comparison": "policy + router_corrected vs heuristic + pix2vox_f",
+   "metrics": [
+    "v1",
+    "cpu_estimated"
+   ]
+  },
+  {
+   "comparison": "router_corrected vs router_plain, under random, heuristic and policy views",
+   "metrics": [
+    "v1",
+    "cpu_estimated"
+   ]
+  }
+ ],
+ "reported_regardless_of_outcome": [
+  "IoU",
+  "cost-v1 utility",
+  "CPU-estimated utility",
+  "GPU latency (s)"
+ ],
+ "exploratory": [
+  "the remaining pipelines of the 15-pipeline grid",
+  "category_true and oracle references",
+  "best of 24 sampled five-view sets",
+  "lambda sensitivity, frozen and adaptive (frozen routers)",
+  "CPU timing sensitivity (pipeline totals; k = 0.75, 1.25)"
+ ],
+ "statistics": {
+  "unit": "object; episodes averaged within objects",
+  "pairing": "one set of bootstrap weights shared by every pipeline",
+  "timing_uncertainty": "the dev timing cohort (26 objects, disjoint from final_test) resampled independently of the final objects, still paired across pipelines",
+  "multiplicity": "one primary hypothesis; secondaries reported with intervals but not as confirmatory; the grid is exploratory"
+ },
+ "conditions": [
+  "CPU-estimated utility is conditional on the dev CPU timing profile and its component model; it is not a claim across machine states",
+  "GPU latency is reported in seconds only: lambda is priced per CPU-second"
+ ],
+ "evaluator": "python build/rl_pipeline/phase3_eval.py --split final_test --views artifacts/final/views_final.json --eval-feats artifacts/final/feats_final.npz --out artifacts/final/eval_final.json"
+}
