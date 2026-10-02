@@ -1,12 +1,12 @@
-EXPECT_BUILD = "b9d9c66"   # the pre-registered code build -- not a dataset name
+EXPECT_BUILD = "698bc1c"   # code build per pre-run amendment 1 -- not a dataset name
 EXPECT_POLICY = "84d66f32d8f4878e3b198607773c087c26c7ec054c3a6b59eb66980e2b6937f2"   # pre-registered sha256
 
 # Final test, collection only (pre-registered in artifacts/final/preregistration.json):
 # draw the frozen starts and random sets for all 312 final objects, run the
 # frozen policy and the farthest-angle heuristic, reconstruct every view set,
 # and extract the final objects' features into a separate file.
-# No score is computed or printed. Re-running after an interruption reuses
-# every reconstruction already in the cache.
+# Raw IoUs are collected; aggregate results are not displayed. Re-running after
+# an interruption reuses every reconstruction already in the cache.
 
 import hashlib, json, shutil, subprocess, sys
 from pathlib import Path
