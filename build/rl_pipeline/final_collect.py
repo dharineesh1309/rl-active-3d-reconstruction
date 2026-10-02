@@ -1,5 +1,7 @@
 """
-Final test, data collection only. It computes and prints NO outcome metric.
+Final test, data collection only. Raw IoUs are collected (and the policy's
+rollout computes its terminal utility through the envelope, as in training);
+aggregate evaluation results are not displayed or inspected.
 
     python final_collect.py --policy artifacts/tier1/set_pose_s164864.pt \
                             --cache cache/utility_cache.json \
@@ -18,6 +20,11 @@ pre-registered in artifacts/final/preregistration.json:
 Every view set is reconstructed into the cache, tagged eval_final_<strategy>.
 The final objects' 24-view ResNet features and poses go to a SEPARATE file,
 never into router or policy training inputs. The views file carries its hash.
+
+Outputs are written as temporary files, validated together, moved into place,
+and only then marked complete (collection_complete.json, with both files'
+hashes). Only that marker blocks a re-run: an interrupted run leaves partial
+files that the next run replaces, reusing every reconstruction in the cache.
 """
 
 import argparse
@@ -51,13 +58,13 @@ def main():
     from extract_router_feats import object_features
     from phase3_views import farthest_angle
     from policy.pose_policy import RGBPosePolicy, load_pose_norm
-    from run_0b import ARMS, greedy_views
+    from run_0b import ARMS, code_build, greedy_views
     from splits import load as load_splits
     from training.utility_envelope import UtilityEnvelope, checkpoint_ids
 
-    for p in (args.out_views, args.out_feats):
-        if Path(p).exists():
-            raise SystemExit(f"{p} exists: the final collection runs once")
+    marker = Path(args.out_views).with_name("collection_complete.json")
+    if marker.exists():
+        raise SystemExit(f"{marker} exists: the final collection is complete and runs once")
     base = Config()
     device = "cuda" if torch.cuda.is_available() else "cpu"
     final = load_splits()["final_test"]
@@ -74,7 +81,8 @@ def main():
     env = UtilityEnvelope(bbs, cost_lambda=base.cost_lambda, cache_path=args.cache,
                           checkpoints=checkpoint_ids(bbs, base), verbose=True,
                           run={"script": "final_collect", "split": "final_test",
-                               "seed": SEED, "policy_sha256": policy_sha})
+                               "seed": SEED, "policy_sha256": policy_sha,
+                               "code": code_build()})
     feats = ResNetFeatures(device=device)
     d_mean, d_std = load_pose_norm()
     root = Path(ds.rendering_root)
@@ -110,18 +118,40 @@ def main():
             print(f"  {i+1}/{len(ds)} objects  {env.stats()}  {time.time()-t0:5.0f}s",
                   flush=True)
 
+    env.flush()
+    vpath, fpath = Path(args.out_views), Path(args.out_feats)
+    vpath.parent.mkdir(parents=True, exist_ok=True)
+    fpath.parent.mkdir(parents=True, exist_ok=True)
+    vtmp, ftmp = Path(str(vpath) + ".tmp"), Path(str(fpath) + ".tmp")
     body = json.dumps(views, sort_keys=True)
-    Path(args.out_views).parent.mkdir(parents=True, exist_ok=True)
-    Path(args.out_views).write_text(json.dumps(
+    vtmp.write_text(json.dumps(
         {"split": "final_test", "seed": SEED, "policy": Path(args.policy).name,
-         "policy_sha256": policy_sha,
+         "policy_sha256": policy_sha, "code": code_build(),
          "sha256": hashlib.sha256(body.encode()).hexdigest(), "views": views}, indent=1))
-    Path(args.out_feats).parent.mkdir(parents=True, exist_ok=True)
-    np.savez(args.out_feats, model_id=np.array(ids),
-             category=np.array([ds.category_of[s] for s, _ in ds.samples]),
-             split=np.array(["final_test"] * len(ids)), feats=F, poses=Pz)
-    print(f"collected {len(views)} final objects; views -> {args.out_views}, "
-          f"features -> {args.out_feats}. No scores computed.")
+    with open(ftmp, "wb") as fh:
+        np.savez(fh, model_id=np.array(ids),
+                 category=np.array([ds.category_of[s] for s, _ in ds.samples]),
+                 split=np.array(["final_test"] * len(ids)), feats=F, poses=Pz)
+
+    # Validate both before either counts as output.
+    v_chk = json.load(open(vtmp))["views"]
+    f_chk = np.load(ftmp)
+    if not (set(v_chk) == set(f_chk["model_id"]) == final
+            and f_chk["feats"].shape == (len(final), 24, 2048)
+            and all(len(o["policy"]) == len(o["heuristic"]) == 4 and len(o["random"]) == 24
+                    for o in v_chk.values())):
+        raise SystemExit("collected outputs failed validation; nothing marked complete")
+    f_chk.close()
+    os.replace(vtmp, vpath)
+    os.replace(ftmp, fpath)
+    sha = lambda p: hashlib.sha256(p.read_bytes()).hexdigest()
+    marker.write_text(json.dumps({"views": vpath.name, "views_sha256": sha(vpath),
+                                  "feats": fpath.name, "feats_sha256": sha(fpath),
+                                  "objects": len(views), "code": code_build(),
+                                  "policy_sha256": policy_sha, "seed": SEED}, indent=1))
+    print(f"collected {len(views)} final objects; views -> {vpath}, features -> {fpath}, "
+          f"marked complete. Raw IoUs are collected; aggregate evaluation results are "
+          f"not displayed or inspected.")
 
 
 if __name__ == "__main__":
