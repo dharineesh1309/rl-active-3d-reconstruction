@@ -29,7 +29,7 @@ router picks the backbone. STOP is an optional extension, gated on a pilot.
 | 0 | freeze splits, cache v2, cost definition, router code, resume, RGB inference | **substantially done**: CUDA resume and legacy-label verification run as gates at the start of Phase 1; `router.npz` is a Phase 2 output |
 | 1 | retrain `set_pose` on `controller_train` (Kaggle), select checkpoints on dev | **done**: selected `set_pose_s164864` (`artifacts/tier1/selection.json`) |
 | 2 | router from that run's cache; top up thin categories | **done**: `artifacts/router/router.npz`; no category thin (min 92) |
-| 3 | dev evaluation matrix + latency + lambda sensitivity | |
+| 3 | dev evaluation matrix + latency + lambda sensitivity (spec below) | next |
 | 4 | STOP pilot (optional) | |
 | 5 | freeze, run `final_test` once, rewrite report | |
 
@@ -97,10 +97,14 @@ the old changed), with labels on **4,327 controller_train objects** (telephone
 92 ... table 851) and none on final_test.
 
 **Phase 1b** (`artifacts/tier1/eval_dev.json`, 309 dev objects x 4 starts):
-the four clean checkpoints and the old Tier 0B policy are indistinguishable --
-policy - random +0.0065 to +0.0071 each, every pairwise |diff| <= 0.0006
-(z <= 0.64). **Retraining on unseen objects neither helped nor hurt view
-selection**; it plateaus by ~62k steps. Features extracted for 6,594 objects.
+policy - random is +0.0065 to +0.0071 for each of the four clean checkpoints
+and the old Tier 0B policy; every pairwise |diff| <= 0.0006 (z <= 0.64).
+**This run showed no statistically detectable dev improvement from clean
+retraining or from training beyond ~62k steps.** That is not equivalence: the
+selected checkpoint vs Tier 0B under the router has a paired 95% interval of
+about +-0.0032, which still admits meaningful differences, and a claim about
+training in general would need independent seeds. Features extracted for
+6,594 objects.
 
 **Phase 2 router** (`train_router.py`, `artifacts/router/router_report_ctrl.json`):
 table from 4,327 controller_train objects, classifier on all non-dev objects
@@ -112,16 +116,52 @@ table from 4,327 controller_train objects, classifier on all non-dev objects
 | true-category lookup (reference) | 12.2% | +0.0040 [+0.0017, +0.0062] |
 | **corrected (shipped)** | **19.8%** | **+0.0065 [+0.0039, +0.0090]** |
 
-corrected - expected: +0.0031 [+0.0010, +0.0052]. The correction's alpha/beta
-come from 5-fold CV over controller_train objects; a single 15% hold-out was a
-lottery (one draw in five picked an over-regularised alpha and gained nothing).
-**The earlier dev-CV 19.8% was optimistic**: a table fit on dev objects only
-scores 10.3% once fit on clean training objects, because dev disagrees with the
-training population on two categories (chair: umiformer vs umiformer_plus;
-telephone: pix2vox_f vs umiformer) -- 24 objects per category, with ShapeNet's
-near-duplicates, is a small sample. Dev also routes harder than held-out
-training objects (two-stage 10% vs 24%). Expect final_test, drawn from the
-same pool as controller_train, to look more like the latter.
+**These are mixed-cache dev results**: scored on all 18,448 cached dev view sets
+(random subsets plus several policies' views), frozen in
+`artifacts/router/dev_cohort_v1.json` so later cache additions cannot change
+them. On that mixture corrected - expected is +0.0031 [+0.0010, +0.0052]; on
+the **selected policy's own views** (4 starts) it is +0.0028 with a 95% interval
+touching zero ([+0.0001, +0.0054] or [-0.0001, +0.0054] depending on the
+bootstrap draw) -- promising, not established. Phase 3 therefore scores both
+the plain and the corrected router under every view strategy.
+
+The correction's alpha/beta come from 5-fold CV over controller_train objects,
+with the classifier, its temperature, the table and the ridge all refit inside
+each fold (an earlier version calibrated the temperature outside the folds; 627
+objects overlapped; fixing it left the selection and the router unchanged). A
+single 15% hold-out was a lottery (one draw in five picked an over-regularised
+alpha).
+
+The earlier dev-CV 19.8% was genuinely out of fold; it was built from a
+dev-population table. Fit on controller_train instead, the same two-stage
+router scores 10.3% on dev; dev and controller_train disagree on two
+categories (chair: umiformer vs umiformer_plus; telephone: pix2vox_f vs
+umiformer). Held-out controller_train objects route better than dev (24% vs
+10%), but that comparison does not isolate object difficulty: training CV
+weights an imbalanced sample (car, chair and table are 54.1% of the 4,327
+objects, 23.1% of the balanced final_test) and its view sets come from training
+trajectories. **Final-test performance is unknown until it is measured.**
+
+**Backbone-only headline so far** (selected policy, 4 starts, dev): policy +
+corrected router vs random views + always-UMIFormer+ is **+0.0178 [+0.0141,
++0.0216]**. At 0.0771/CPU-second that covers ~0.23 s of controller overhead per
+object; one CPU measurement of view selection was 0.43 s. Total latency decides
+whether the system pays for itself.
+
+**Phase 3 spec** (dev only, objects as the resampling unit, starts averaged
+within objects, every view-set list frozen before scoring):
+* views {random, farthest-angle heuristic, selected policy} x backbone
+  choice {each fixed backbone, plain router, corrected router, true-category
+  lookup (reference, not deployable), oracle (reference)}; "best of 24 sampled
+  five-view sets" named as such.
+* report IoU, **backbone-only utility**, total latency, and utility including
+  controller overhead; shared ResNet features counted once; CPU and GPU
+  measured separately; model loading stated explicitly (excluded from the
+  per-object figure, reported on its own).
+* lambda sensitivity, both kinds, from raw IoU (no new reconstructions):
+  *frozen-system* -- the decisions fixed, rescored at each lambda; *adaptive* --
+  the table, ridge and their CV rebuilt from training labels at each lambda.
+  The view policy stays fixed in both.
 
 **Checkpoint selection** (`score_routed.py`, refinement 5): with the router,
 every checkpoint's dev view sets score within noise (routed 0.6832-0.6843);
