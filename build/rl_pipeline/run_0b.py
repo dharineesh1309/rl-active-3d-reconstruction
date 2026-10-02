@@ -237,7 +237,7 @@ def evaluate(policy, test_ds, envelope, feats, budget, n_subsets, device, seed=0
     rng = np.random.default_rng(seed)
     extra = np.random.default_rng(seed + 1)
     k = budget + 1                                   # seeded view + budget
-    pol_u, rnd_u, orc_u, ids, cats = [], [], [], [], []
+    pol_u, rnd_u, orc_u, ids, cats, pol_views = [], [], [], [], [], []
     policy.eval()
     for i in range(len(test_ds)):
         mid = test_ds.samples[i][1]
@@ -251,13 +251,15 @@ def evaluate(policy, test_ds, envelope, feats, budget, n_subsets, device, seed=0
             continue
 
         item = test_ds[i]
-        u = []
+        u, vs = [], []
         envelope.tag = {"kind": "eval_policy", "ref": policy_ref}
         for s in starts:
             views = greedy_views(policy, envelope, feats, budget, device, item, s)
             assert len(views) == k
             u.append(envelope(item, views))
+            vs.append(views)
         pol_u.append(float(np.mean(u)))
+        pol_views.append(vs)
         envelope.tag = {"kind": "eval_random", "ref": seed}
         vals = [envelope(item, s) for s in subsets]
         rnd_u.append(float(np.mean(vals)))
@@ -278,7 +280,8 @@ def evaluate(policy, test_ds, envelope, feats, budget, n_subsets, device, seed=0
             "policy_minus_random_se": float(d.std(ddof=1) / np.sqrt(len(d))),
             "headroom": O - R, "fraction_captured": frac,
             "per_object": {"model_id": ids, "category": cats, "policy": pol_u,
-                           "random": rnd_u, "oracle": orc_u}}
+                           "random": rnd_u, "oracle": orc_u,
+                           "views": pol_views}}     # per object, per start
 
 
 def save_state(path, trainer, envs, **extra):
