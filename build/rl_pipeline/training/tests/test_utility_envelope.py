@@ -21,7 +21,7 @@ import torch
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 
-from training.utility_envelope import UtilityEnvelope, convert_legacy
+from training.utility_envelope import UtilityEnvelope, convert_legacy, merge_caches
 
 CK = {"pix2vox_f": "sha256:aa", "umiformer": "sha256:bb"}
 
@@ -117,6 +117,24 @@ def main():
         good.cache["iou"]["zz|1,2,3"] = {"pix2vox_f": 1.0, "umiformer": 0.5}
         good.cache["src"]["zz|1,2,3"] = ["orphan", "unknown", None]
         assert good.verify_legacy(lambda mid: item, cat) == {"orphan": None}
+
+        # Merge: a smaller cache's unique entries survive a bigger one, a later
+        # compatibility record is kept, and conflicting labels are refused.
+        a = json.load(open(conv.replace("convFalse", "convTrue")))   # legacy, unverified
+        b = good.cache                                               # + record, + orphan
+        a["iou"]["only_a|0,1,2"] = {"pix2vox_f": 0.3, "umiformer": 0.2}
+        a["src"]["only_a|0,1,2"] = ["legacy", "unknown", None]
+        m = merge_caches([b, a])
+        assert "only_a|0,1,2" in m["iou"] and set(b["iou"]) <= set(m["iou"])
+        assert m["meta"]["runs"]["legacy"]["compatible_with"], "lost a compatibility record"
+        bad = json.loads(json.dumps(a))
+        bad["iou"]["a0|0,2,4"]["umiformer"] += 0.01
+        try:
+            merge_caches([b, bad])
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("merged two different labels for one view set")
     print("Utility envelope tests passed.")
 
 
