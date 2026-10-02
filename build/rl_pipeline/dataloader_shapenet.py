@@ -152,7 +152,7 @@ class ShapeNetChoyDataset:
         self,
         rendering_root: str,
         voxel_root: str,
-        taxonomy_path: str = "datasets/ShapeNet.json",
+        taxonomy_path: str = str(Path(__file__).resolve().parent / "datasets" / "ShapeNet.json"),
         split: str = "train",
         categories: Optional[List[str]] = None,
         limit_per_category: Optional[int] = None,
