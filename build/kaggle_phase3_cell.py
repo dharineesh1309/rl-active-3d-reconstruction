@@ -1,4 +1,4 @@
-EXPECT_BUILD = "590089e"   # code version (rl_pipeline/BUILD.txt) -- not a dataset name
+EXPECT_BUILD = "3028ea3"   # code version (rl_pipeline/BUILD.txt) -- not a dataset name
 
 # Phase 3 GPU job: (1) reconstruct the frozen farthest-angle view sets on dev,
 # (2) latency on this GPU: components and the 15 pipelines on the frozen
