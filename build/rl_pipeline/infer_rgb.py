@@ -49,12 +49,17 @@ def pick_backbone(router, feats):
     """The two-stage router (train_router.py) on one view set's features."""
     from train_router import softmax
 
-    s = ((feats.mean(0) - router["mu"]) / router["sd"]) @ router["W"]
-    table = router["table"]
-    if str(router["variant"]) == "expected":
-        m = int((softmax(s[None], float(router["T"])) @ table).argmax())
-    else:
+    x = feats.mean(0)
+    s = ((x - router["mu"]) / router["sd"]) @ router["W"]
+    table, variant = router["table"], str(router["variant"])
+    if variant == "argmax":
         m = int(table[s.argmax()].argmax())
+    else:
+        P = (softmax(s[None], float(router["T"])) @ table)[0]
+        if variant == "corrected":
+            P = P - P.mean() + float(router["beta"]) * (
+                ((x - router["ridge_mu"]) / router["ridge_sd"]) @ router["ridge_W"])
+        m = int(P.argmax())
     return str(router["backbones"][m])
 
 
