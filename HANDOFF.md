@@ -161,10 +161,21 @@ within objects, every view-set list frozen before scoring):
 * two separate utility accountings, never mixed: **frozen cost v1** (declared
   backbone prices, backbone-only) and **fully measured** (IoU - lambda x the
   measured backbone + controller seconds of the same benchmark run).
-  `bench_latency.py` times complete pipelines on a fixed 26-object cohort with
-  24 candidates and keeps every raw measurement. Heuristic + router still pays
-  ResNet (~0.32 s CPU); only heuristic + a fixed backbone is nearly free. The
-  first CPU run used 10 candidates (local mirror) and was discarded.
+  `bench_latency.py` times the 15 deployable pipelines ({random, heuristic,
+  policy} x {3 fixed backbones, plain router, corrected router}) on the FROZEN
+  evaluation episodes of a fixed 26-object cohort (2 dev objects per category,
+  24 candidates), keeping every raw measurement with its start, views and
+  routed backbone, and checking that the policy and heuristic reproduce their
+  frozen views. Heuristic + router still pays ResNet (~0.32 s CPU); only
+  heuristic + a fixed backbone is nearly free. The first CPU run used 10
+  candidates (local mirror) and was discarded.
+* the measured cost term uses MEAN runtimes with object weights (medians only
+  describe latency). Evaluation decisions outside the benchmark cohort are
+  priced from component means -- controller by strategy, backbone by the one
+  actually chosen -- and labelled *estimated*; the cohort's end-to-end totals
+  check that estimate. Timing uncertainty is resampled together with objects.
+* caches are combined only with `merge_caches()` (union by key, refuses on
+  conflicting labels or provenance), never replaced by a bigger copy.
 * lambda sensitivity, both kinds, from raw IoU (no new reconstructions):
   *frozen-system* -- the decisions fixed, rescored at each lambda; *adaptive* --
   the table, ridge and their CV rebuilt from training labels at each lambda.
