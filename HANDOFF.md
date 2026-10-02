@@ -27,7 +27,7 @@ router picks the backbone. STOP is an optional extension, gated on a pilot.
 | order | work | status |
 |---|---|---|
 | 0 | freeze splits, cache v2, cost definition, router code, resume, RGB inference | **substantially done**: CUDA resume and legacy-label verification run as gates at the start of Phase 1; `router.npz` is a Phase 2 output |
-| 1 | retrain `set_pose` on `controller_train` (Kaggle), select checkpoints on dev | next |
+| 1 | retrain `set_pose` on `controller_train` (Kaggle), select checkpoints on dev | **trained** (below); paired selection running as Phase 1b |
 | 2 | router from that run's cache; top up thin categories | |
 | 3 | dev evaluation matrix + latency + lambda sensitivity | |
 | 4 | STOP pilot (optional) | |
@@ -84,6 +84,17 @@ probabilities) 19.8%, +0.0066 vs best single backbone, 95% CI [+0.0037,
 +0.0095]**; true-label reference 22.3%. This is a development CV result. The
 interval supports beating the single backbone; it does not show that
 probability weighting beats argmax (18.0%).
+
+**Phase 1 run** (Kaggle T4, build 9809170, `artifacts/tier1/set_pose.jsonl`):
+200,704 steps, 50,176 episodes, 9.19 h, one session. All gates passed on CUDA;
+the legacy run verified compatible (26 entries, 13 categories, max |dIoU|
+2.9e-4 -- GPU sessions are not bit-identical, a voxel or two). Dev
+policy - random (one start, se ~0.0016) climbs to +0.0081 at 62k steps and
+stays at +0.0068 to +0.0081 after, 17-19.5% of the 0.0417 headroom; Tier 0B's
+policy was +0.0069 at its last eval. Kept: s62464, s123904, s164864 (+0.0081,
++0.0080, +0.0080) and the final s200704. Cache now 107,955 view sets (none of
+the old changed), with labels on **4,327 controller_train objects** (telephone
+92 ... table 851) and none on final_test.
 
 **Scripts**: `run_0b.py` (trains on controller_train, evaluates on dev, keeps
 the 3 best checkpoints + full-state `<arm>_last.pt`, `--resume`), `eval_0b.py`
