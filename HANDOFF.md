@@ -27,8 +27,8 @@ router picks the backbone. STOP is an optional extension, gated on a pilot.
 | order | work | status |
 |---|---|---|
 | 0 | freeze splits, cache v2, cost definition, router code, resume, RGB inference | **substantially done**: CUDA resume and legacy-label verification run as gates at the start of Phase 1; `router.npz` is a Phase 2 output |
-| 1 | retrain `set_pose` on `controller_train` (Kaggle), select checkpoints on dev | **trained** (below); paired selection running as Phase 1b |
-| 2 | router from that run's cache; top up thin categories | |
+| 1 | retrain `set_pose` on `controller_train` (Kaggle), select checkpoints on dev | **done**: selected `set_pose_s164864` (`artifacts/tier1/selection.json`) |
+| 2 | router from that run's cache; top up thin categories | **done**: `artifacts/router/router.npz`; no category thin (min 92) |
 | 3 | dev evaluation matrix + latency + lambda sensitivity | |
 | 4 | STOP pilot (optional) | |
 | 5 | freeze, run `final_test` once, rewrite report | |
@@ -95,6 +95,38 @@ policy was +0.0069 at its last eval. Kept: s62464, s123904, s164864 (+0.0081,
 +0.0080, +0.0080) and the final s200704. Cache now 107,955 view sets (none of
 the old changed), with labels on **4,327 controller_train objects** (telephone
 92 ... table 851) and none on final_test.
+
+**Phase 1b** (`artifacts/tier1/eval_dev.json`, 309 dev objects x 4 starts):
+the four clean checkpoints and the old Tier 0B policy are indistinguishable --
+policy - random +0.0065 to +0.0071 each, every pairwise |diff| <= 0.0006
+(z <= 0.64). **Retraining on unseen objects neither helped nor hurt view
+selection**; it plateaus by ~62k steps. Features extracted for 6,594 objects.
+
+**Phase 2 router** (`train_router.py`, `artifacts/router/router_report_ctrl.json`):
+table from 4,327 controller_train objects, classifier on all non-dev objects
+(89.8% category accuracy). On dev:
+
+| router | captured | vs best single [95% CI] |
+|---|---|---|
+| expected (two-stage) | 10.3% | +0.0034 [+0.0016, +0.0051] |
+| true-category lookup (reference) | 12.2% | +0.0040 [+0.0017, +0.0062] |
+| **corrected (shipped)** | **19.8%** | **+0.0065 [+0.0039, +0.0090]** |
+
+corrected - expected: +0.0031 [+0.0010, +0.0052]. The correction's alpha/beta
+come from 5-fold CV over controller_train objects; a single 15% hold-out was a
+lottery (one draw in five picked an over-regularised alpha and gained nothing).
+**The earlier dev-CV 19.8% was optimistic**: a table fit on dev objects only
+scores 10.3% once fit on clean training objects, because dev disagrees with the
+training population on two categories (chair: umiformer vs umiformer_plus;
+telephone: pix2vox_f vs umiformer) -- 24 objects per category, with ShapeNet's
+near-duplicates, is a small sample. Dev also routes harder than held-out
+training objects (two-stage 10% vs 24%). Expect final_test, drawn from the
+same pool as controller_train, to look more like the latter.
+
+**Checkpoint selection** (`score_routed.py`, refinement 5): with the router,
+every checkpoint's dev view sets score within noise (routed 0.6832-0.6843);
+clean_s164864 ties the old Tier 0B policy at the top and is selected by the rule
+"highest routed dev utility, ties to a controller_train policy".
 
 **Scripts**: `run_0b.py` (trains on controller_train, evaluates on dev, keeps
 the 3 best checkpoints + full-state `<arm>_last.pt`, `--resume`), `eval_0b.py`
