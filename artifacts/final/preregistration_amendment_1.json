@@ -1,0 +1,9 @@
+{
+ "date": "2026-10-03",
+ "made_before_any_final_data": true,
+ "reason": "Pre-run review: (1) the evaluator now enforces this registration -- artifact hashes, settings, the collected policy identity and code build, the collection's backbone checkpoints, and the completion marker -- and records the registration identity in its results; (2) collection now writes its outputs atomically and marks completion, so an interrupted run recovers instead of being blocked; (3) the bootstrap scheme is recorded per mode; (4) wording: raw IoUs are collected, aggregate results are not displayed. No sampling, comparison, metric, statistic or artifact changed.",
+ "changes": {
+  "code_build": "698bc1c"
+ },
+ "original": "preregistration.json, unmodified"
+}
