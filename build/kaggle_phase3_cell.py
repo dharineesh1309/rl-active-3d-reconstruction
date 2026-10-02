@@ -1,9 +1,10 @@
-EXPECT_BUILD = "11edd00"   # code version (rl_pipeline/BUILD.txt) -- not a dataset name
+EXPECT_BUILD = "6e6bd7b-dirty"   # code version (rl_pipeline/BUILD.txt) -- not a dataset name
 
 # Phase 3 GPU job: (1) reconstruct the frozen farthest-angle view sets on dev,
-# (2) per-component latency on this GPU.
+# (2) latency on this GPU, components and end-to-end pipelines, (3) export the
+# benchmark cohort's 24-view renderings so the CPU benchmark can run locally.
 
-import json, shutil, subprocess, sys
+import hashlib, json, shutil, subprocess, sys
 from pathlib import Path
 import torch
 
@@ -32,11 +33,24 @@ def find(name, root=INPUT, max_depth=7):
                 stack.append((p, depth + 1))
     return sorted(hits, key=lambda p: len(p.parts))
 
+def sha(f):
+    return hashlib.sha256(Path(f).read_bytes()).hexdigest()
+
 def one(name, member):
+    """The attached `name/member`; several copies are fine only if identical."""
     hits = [p / member for p in find(name) if (p / member).is_file()]
     if not hits:
         raise SystemExit(f"attach the phase 3 inputs (no {name}/{member} found)")
+    if len({sha(h) for h in hits}) > 1:
+        raise SystemExit(f"conflicting copies of {name}/{member}: {hits}; attach one")
     return hits[0]
+
+def entries(f):
+    try:
+        c = json.load(open(f))
+    except (OSError, ValueError):
+        return None
+    return len(c["iou"]) if c.get("format") == 2 and "src" in c else None
 
 # ── Code ─────────────────────────────────────────────────────────────────────
 builds = {p: (p / "BUILD.txt").read_text().strip()
@@ -51,26 +65,27 @@ if dst.exists():
 shutil.copytree(match[0], dst)
 print(f"code {match[0]} (build {EXPECT_BUILD})")
 
-# ── Inputs, by content ───────────────────────────────────────────────────────
-caches = []
-for d in find("cache"):
-    f = d / "utility_cache.json"
-    if f.is_file():
-        c = json.load(open(f))
-        if c.get("format") == 2 and "src" in c:
-            caches.append((len(c["iou"]), f))
-if not caches:
-    raise SystemExit("no current-format cache attached")
-n, src_cache = max(caches)
+# ── Cache: keep this session's own progress; never overwrite it ─────────────
 cache = WORKING / "cache/utility_cache.json"
-cache.parent.mkdir(parents=True, exist_ok=True)
-shutil.copy(src_cache, cache)
+attached = [(n, f) for d in find("cache")
+            if (n := entries(d / "utility_cache.json")) is not None
+            for f in [d / "utility_cache.json"]]
+if not attached:
+    raise SystemExit("no current-format cache attached")
+n_att, src_cache = max(attached)
+n_work = entries(cache) if cache.is_file() else None
+if n_work is not None and n_work >= n_att:
+    print(f"keeping this session's cache ({n_work:,} view sets)")
+else:
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy(src_cache, cache)
+    print(f"cache {src_cache} ({n_att:,} view sets)")
+
 views = one("phase3", "views_dev_to_score.json")
 router = one("router", "router.npz")
 selected = json.load(open(one("tier1", "selection.json")))["selected"]
 policy = one("tier1", f"set_pose_s{selected.split('_s')[-1]}.pt")
-print(f"cache {src_cache} ({n:,} view sets)\nviews {views}\nrouter {router}\n"
-      f"policy {policy} ({selected})")
+print(f"views {views}\nrouter {router}\npolicy {policy} ({selected})")
 
 sys.path.insert(0, str(dst))
 from kaggle_train import preflight, resolve_inputs
@@ -88,5 +103,18 @@ subprocess.run([sys.executable, "-u", str(dst / "score_view_sets.py"),
 print("\n--- GPU latency ---", flush=True)
 subprocess.run([sys.executable, "-u", str(dst / "bench_latency.py"),
                 "--policy", str(policy), "--router", str(router),
-                "--objects", "20", "--out", str(out / "latency_gpu.json")],
+                "--repeats", "3", "--out", str(out / "latency_gpu.json")],
                cwd=str(dst), env=env, check=True)
+
+print("\n--- export the benchmark cohort for the CPU run ---", flush=True)
+from bench_latency import bench_cohort
+from splits import taxonomy
+_, where = taxonomy()
+R, V = Path(env["SHAPENET_RENDERING_ROOT"]), Path(env["SHAPENET_VOXEL_ROOT"])
+bench = WORKING / "bench_objects"
+for m in bench_cohort():
+    syn = where[m][0][0]
+    shutil.copytree(R / syn / m, bench / "ShapeNetRendering" / syn / m, dirs_exist_ok=True)
+    (bench / "ShapeNetVox32" / syn / m).mkdir(parents=True, exist_ok=True)
+    shutil.copy(V / syn / m / "model.binvox", bench / "ShapeNetVox32" / syn / m / "model.binvox")
+print(f"exported {len(bench_cohort())} objects to {bench}")
