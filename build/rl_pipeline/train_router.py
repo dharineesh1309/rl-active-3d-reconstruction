@@ -34,6 +34,7 @@ seen-object labels and ~0% on clean ones (HANDOFF, Tier 1).
 """
 
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -110,6 +111,21 @@ def fit_temperature(scores, y, classes):
     grid = np.logspace(-3, 1, 81)
     nll = [-np.log(softmax(scores, T)[np.arange(len(t)), t] + 1e-12).mean() for T in grid]
     return float(grid[int(np.argmin(nll))])
+
+
+def fit_stage1(X, cats, obj, rows, classes, seed):
+    """
+    Classifier and temperature from `rows` only: T is fitted on a 1/7 object
+    slice held out from a first classifier fit, then the classifier is refit on
+    all of `rows`. Called once per CV fold, so calibration never sees the fold.
+    """
+    objs = np.unique(obj[rows])
+    t_obj = np.random.default_rng(seed).choice(objs, len(objs) // 7, replace=False)
+    in_t = np.isin(obj[rows], t_obj)
+    a, b = rows[~in_t], rows[in_t]
+    clf = fit_classifier(X[a], cats[obj[a]], obj[a], classes)
+    T = fit_temperature(class_scores(clf, X[b]), cats[obj[b]], classes)
+    return fit_classifier(X[rows], cats[obj[rows]], obj[rows], classes), T
 
 
 def fit_table(U, obj, cat_of_row, classes, fallback):
@@ -193,6 +209,8 @@ def main():
     ap.add_argument("--out", default="artifacts/router")
     ap.add_argument("--cv-dev", type=int, default=0,
                     help="K: build the table by K-fold CV over dev objects")
+    ap.add_argument("--dev-cohort", default="artifacts/router/dev_cohort_v1.json",
+                    help="frozen list of dev view sets to score; written on first run")
     ap.add_argument("--folds", type=int, default=5,
                     help="CV folds over controller_train for the correction")
     ap.add_argument("--min-objects", type=int, default=60,
@@ -211,17 +229,28 @@ def main():
     assert not is_final.any(), "final_test objects in the router data"
     X = set_features(d["feats"], obj, views)
 
-    # Stage 1 on everything labelled outside dev, minus a slice for T.
-    clf_obj = np.flatnonzero(~is_dev)
-    rng = np.random.default_rng(args.seed)
-    t_obj = set(rng.choice(clf_obj, len(clf_obj) // 7, replace=False).tolist())
-    r_fit = np.flatnonzero(~is_dev[obj] & ~np.isin(obj, list(t_obj)))
-    r_T = np.flatnonzero(np.isin(obj, list(t_obj)))
-    clf = fit_classifier(X[r_fit], cats[obj[r_fit]], obj[r_fit], classes)
-    T = fit_temperature(class_scores(clf, X[r_T]), cats[obj[r_T]], classes)
-    clf = fit_classifier(X[~is_dev[obj]], cats[obj[~is_dev[obj]]], obj[~is_dev[obj]], classes)
+    # Stage 1 on everything labelled outside dev.
+    clf, T = fit_stage1(X, cats, obj, np.flatnonzero(~is_dev[obj]), classes, args.seed)
 
+    # The dev view sets scored are frozen on first use: later cache additions
+    # (heuristic or policy evaluations) must not change the population.
+    keys = np.array([f"{mids[o]}|" + ",".join(map(str, v)) for o, v in zip(obj, views)])
     dev_rows = np.flatnonzero(is_dev[obj])
+    cohort = Path(args.dev_cohort)
+    if cohort.is_file():
+        want = json.load(open(cohort))["keys"]
+        dev_rows = dev_rows[np.isin(keys[dev_rows], want)]
+        if len(dev_rows) != len(want):
+            raise SystemExit(f"{len(want) - len(dev_rows)} frozen dev view sets missing "
+                             "from the cache")
+    else:
+        cohort.parent.mkdir(parents=True, exist_ok=True)
+        cohort.write_text(json.dumps({
+            "note": "dev view sets the router is scored on: every cached dev entry at "
+                    "freezing -- a MIXTURE of random subsets and several policies' "
+                    "views, not one deployment distribution",
+            "keys": sorted(keys[dev_rows].tolist())}))
+        print(f"froze {len(dev_rows):,} dev view sets in {cohort}")
     sc = class_scores(clf, X[dev_rows])
     true_idx = np.searchsorted(classes, cats[obj[dev_rows]])
     acc = object_mean((sc.argmax(1) == true_idx).astype(float), obj[dev_rows])
@@ -262,13 +291,13 @@ def main():
             in_f = np.isin(obj, f)
             r_fit, r_f = tr[~in_f[tr]], np.flatnonzero(in_f)
             r_cls = np.flatnonzero(~is_dev[obj] & ~in_f)
-            clf_f = fit_classifier(X[r_cls], cats[obj[r_cls]], obj[r_cls], classes)
+            clf_f, T_f = fit_stage1(X, cats, obj, r_cls, classes, args.seed)
             sv = np.array([object_mean(U[r_fit, k], obj[r_fit]) for k in range(len(names))])
             tab_f = fit_table(U[r_fit], obj[r_fit], cats[obj[r_fit]], classes, sv)
             fmu, fsd, Wf = fit_ridge(X[r_fit], U[r_fit], obj[r_fit], RIDGE_ALPHAS)
             sc_f, Uf = class_scores(clf_f, X[r_f]), U[r_f]
             for a, b in sums:
-                p = corrected(sc_f, T, tab_f, X[r_f], fmu, fsd, Wf[a], b)
+                p = corrected(sc_f, T_f, tab_f, X[r_f], fmu, fsd, Wf[a], b)
                 sums[a, b] += len(f) * object_mean(Uf.max(1) - Uf[np.arange(len(Uf)), p],
                                                    obj[r_f])
         hold_regret = {k: v / len(ctrl_objs) for k, v in sums.items()}
@@ -310,7 +339,12 @@ def main():
     report = {"table_source": table_src, "variant": chosen, "temperature": T,
               "category_accuracy": acc, "backbones": names, "dev": res,
               "folds": fold_ids, "coverage": None if args.cv_dev else cover,
-              "corrected_vs_expected": cve, "alpha": ALPHA, "seed": args.seed}
+              "corrected_vs_expected": cve, "alpha": ALPHA, "seed": args.seed,
+              "dev_cohort": {"path": str(cohort), "view_sets": int(len(dev_rows)),
+                             "kind": "mixed cached dev view sets"},
+              "train_view_sets": None if args.cv_dev else {
+                  "n": int(len(tr)),
+                  "sha256": hashlib.sha256("\n".join(sorted(keys[tr])).encode()).hexdigest()}}
     (out / f"router_report_{tag}.json").write_text(json.dumps(report, indent=1))
     if not args.cv_dev:
         report["correction"] = {"alpha": alpha, "beta": beta, "cv_folds": args.folds,
