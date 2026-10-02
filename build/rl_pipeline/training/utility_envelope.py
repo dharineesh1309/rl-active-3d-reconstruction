@@ -286,6 +286,49 @@ class UtilityEnvelope:
                 "hit_rate": self.hits / total if total else 0.0}
 
 
+def merge_caches(caches, tol: float = 1e-3) -> dict:
+    """
+    Union of format-2 caches, so no copy's entries are ever lost.
+
+    Refuses (ValueError) when they cannot be one label set: different scoring
+    versions or thresholds, known checkpoint hashes that differ, one run id
+    with different provenance (beyond compatibility records, which are
+    unioned), or one view set whose IoUs differ by more than `tol`.
+    """
+    out = {"format": FORMAT, "meta": {"runs": {}}, "iou": {}, "src": {}}
+    meta = out["meta"]
+    for c in caches:
+        if c.get("format") != FORMAT or "src" not in c:
+            raise ValueError("not a current format-2 cache")
+        for key in ("scoring", "thresholds"):
+            if meta.setdefault(key, c["meta"].get(key)) != c["meta"].get(key):
+                raise ValueError(f"caches differ in {key}")
+        for rid, r in c["meta"]["runs"].items():
+            mine = meta["runs"].get(rid)
+            if mine is None:
+                meta["runs"][rid] = {**r, "compatible_with": list(r.get("compatible_with", []))}
+                continue
+            strip = lambda x: {k: v for k, v in x.items() if k != "compatible_with"}
+            if strip(mine) != strip(r):
+                raise ValueError(f"run {rid} has different provenance in two caches")
+            for rec in r.get("compatible_with", []):
+                if rec not in mine["compatible_with"]:
+                    mine["compatible_with"].append(rec)
+        for k, v in c["iou"].items():
+            if k not in out["iou"]:
+                out["iou"][k], out["src"][k] = v, c["src"][k]
+            elif max(abs(v[b] - out["iou"][k][b]) for b in v) > tol:
+                raise ValueError(f"view set {k} has different IoUs in two caches")
+    known = {json.dumps(r["checkpoints"], sort_keys=True) for r in meta["runs"].values()
+             if _known(r.get("checkpoints"))}
+    if len(known) > 1:
+        raise ValueError("caches were labelled by different checkpoints")
+    for r in meta["runs"].values():
+        if not r["compatible_with"]:
+            del r["compatible_with"]
+    return out
+
+
 def convert_legacy(src, dst, lam: float, costs: dict, thresholds: dict, note: str):
     """
     Legacy cache {key: {name: utility}} -> format 2, as IoU = utility + lam*cost.
