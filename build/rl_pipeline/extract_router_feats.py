@@ -42,6 +42,20 @@ def taxonomy_index():
     return where
 
 
+def object_features(rn, render_dir, V, d_mean, d_std, device):
+    """All V views' ResNet features (float16) and pose descriptors, exactly as
+    the policy sees them (RGBA -> RGB, the same transform)."""
+    from dataloader_shapenet import _read_metadata
+    from policy.pose_policy import pose_descriptor
+
+    cams = _read_metadata(render_dir / "rendering_metadata.txt", V)
+    x = torch.stack([rn.tf(Image.open(render_dir / f"{v:02d}.png").convert("RGB"))
+                     for v in range(V)]).to(device)
+    with torch.no_grad():
+        f = rn.model(x).reshape(V, -1).cpu().numpy().astype(np.float16)
+    return f, pose_descriptor(cams, d_mean, d_std)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--cache", default="cache/utility_cache.json")
@@ -49,9 +63,8 @@ def main():
     ap.add_argument("--n-views", type=int, default=24)
     args = ap.parse_args()
 
-    from dataloader_shapenet import _read_metadata
     from env.rgb_view_env import ResNetFeatures
-    from policy.pose_policy import load_pose_norm, pose_descriptor
+    from policy.pose_policy import load_pose_norm
     from training.utility_envelope import load_cache
 
     root = (os.environ.get("SHAPENET_RENDERING_ROOT")
@@ -71,14 +84,8 @@ def main():
     poses = np.zeros((len(keep), V, 5), np.float32)
     t0 = time.time()
     for i, m in enumerate(keep):
-        synset = where[m][0][0]
-        rd = Path(root) / synset / m / "rendering"
-        cams = _read_metadata(rd / "rendering_metadata.txt", V)
-        x = torch.stack([rn.tf(Image.open(rd / f"{v:02d}.png").convert("RGB"))
-                         for v in range(V)]).to(device)
-        with torch.no_grad():
-            feats[i] = rn.model(x).reshape(V, -1).cpu().numpy()
-        poses[i] = pose_descriptor(cams, d_mean, d_std)
+        rd = Path(root) / where[m][0][0] / m / "rendering"
+        feats[i], poses[i] = object_features(rn, rd, V, d_mean, d_std, device)
         if (i + 1) % 200 == 0 or i + 1 == len(keep):
             print(f"  {i+1:>5}/{len(keep)}  {time.time()-t0:6.0f}s", flush=True)
 
