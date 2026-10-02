@@ -1,8 +1,9 @@
 EXPECT_BUILD = "590089e"   # code version (rl_pipeline/BUILD.txt) -- not a dataset name
 
 # Phase 3 GPU job: (1) reconstruct the frozen farthest-angle view sets on dev,
-# (2) latency on this GPU, components and end-to-end pipelines, (3) export the
-# benchmark cohort's 24-view renderings so the CPU benchmark can run locally.
+# (2) latency on this GPU: components and the 15 pipelines on the frozen
+# evaluation episodes, (3) export the benchmark cohort's 24-view renderings so
+# the CPU benchmark can run locally on the same objects.
 
 import hashlib, json, shutil, subprocess, sys
 from pathlib import Path
@@ -65,29 +66,35 @@ if dst.exists():
 shutil.copytree(match[0], dst)
 print(f"code {match[0]} (build {EXPECT_BUILD})")
 
-# ── Cache: keep this session's own progress; never overwrite it ─────────────
+# ── Cache: the union of this session's cache and every attached one ─────────
+# merge_caches keeps every entry of every copy and refuses (leaving the files
+# untouched) if they disagree on scoring, checkpoints, provenance or a label.
+sys.path.insert(0, str(dst))
+from training.utility_envelope import merge_caches
 cache = WORKING / "cache/utility_cache.json"
-attached = [(n, f) for d in find("cache")
-            if (n := entries(d / "utility_cache.json")) is not None
-            for f in [d / "utility_cache.json"]]
-if not attached:
+sources = [d / "utility_cache.json" for d in find("cache")
+           if entries(d / "utility_cache.json") is not None]
+if cache.is_file():
+    sources.append(cache)
+if not sources:
     raise SystemExit("no current-format cache attached")
-n_att, src_cache = max(attached)
-n_work = entries(cache) if cache.is_file() else None
-if n_work is not None and n_work >= n_att:
-    print(f"keeping this session's cache ({n_work:,} view sets)")
-else:
-    cache.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy(src_cache, cache)
-    print(f"cache {src_cache} ({n_att:,} view sets)")
+try:
+    merged = merge_caches([json.load(open(f)) for f in sources])
+except ValueError as e:
+    raise SystemExit(f"caches cannot be merged ({e}); nothing was overwritten")
+cache.parent.mkdir(parents=True, exist_ok=True)
+tmp = cache.with_suffix(".tmp")
+tmp.write_text(json.dumps(merged))
+tmp.replace(cache)
+print(f"cache: union of {len(sources)} copies -> {len(merged['iou']):,} view sets")
 
 views = one("phase3", "views_dev_to_score.json")
+frozen = one("phase3", "views_dev.json")
 router = one("router", "router.npz")
 selected = json.load(open(one("tier1", "selection.json")))["selected"]
 policy = one("tier1", f"set_pose_s{selected.split('_s')[-1]}.pt")
 print(f"views {views}\nrouter {router}\npolicy {policy} ({selected})")
 
-sys.path.insert(0, str(dst))
 from kaggle_train import preflight, resolve_inputs
 preflight(require_cuda=True)
 env = resolve_inputs()
@@ -103,7 +110,7 @@ subprocess.run([sys.executable, "-u", str(dst / "score_view_sets.py"),
 print("\n--- GPU latency ---", flush=True)
 subprocess.run([sys.executable, "-u", str(dst / "bench_latency.py"),
                 "--policy", str(policy), "--router", str(router),
-                "--repeats", "3", "--out", str(out / "latency_gpu.json")],
+                "--views", str(frozen), "--out", str(out / "latency_gpu.json")],
                cwd=str(dst), env=env, check=True)
 
 print("\n--- export the benchmark cohort for the CPU run ---", flush=True)
