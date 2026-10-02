@@ -100,6 +100,7 @@ def main():
     item = load_object(args.object_dir, args.n_views)
     policy = RGBPosePolicy(n_candidates=args.n_views, **ARMS[ck["arm"]]).to(device)
     policy.load_state_dict(ck["policy"])
+    policy.eval()                                # as in evaluation
     feats = ResNetFeatures(device=device)
     sync()
     t_load_ctrl = time.time() - t
