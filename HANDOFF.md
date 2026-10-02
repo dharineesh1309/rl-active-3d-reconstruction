@@ -30,7 +30,7 @@ router picks the backbone. STOP is an optional extension, gated on a pilot.
 | 1 | retrain `set_pose` on `controller_train` (Kaggle), select checkpoints on dev | **done**: selected `set_pose_s164864` (`artifacts/tier1/selection.json`) |
 | 2 | router from that run's cache; top up thin categories | **done**: `artifacts/router/router.npz`; no category thin (min 92) |
 | 3 | dev evaluation matrix + latency + lambda sensitivity (spec below) | **done**: `artifacts/phase3/eval_dev.json` (results below) |
-| 4 | STOP pilot (optional) | |
+| 4 | STOP pilot (optional) | **skipped** for scope: variable-budget acquisition remains untested |
 | 5 | freeze, run `final_test` once, rewrite report | |
 
 **Protocol** (`build/rl_pipeline/configs/splits_v1.json`, built by `splits.py`,
@@ -195,34 +195,52 @@ joint bootstrap; baseline random views + always UMIFormer+):
 | policy + oracle (reference) | 0.784 | +0.0414 | -- | -- |
 
 Findings:
-* **Backbone-only, the full system wins**: policy + corrected router is the
-  best deployable pipeline.
+* **Backbone-only, the full system has the highest dev mean** of the
+  deployable pipelines (superiority over each alternative is only what the
+  paired contrasts below establish).
 * **The farthest-angle heuristic carries most of the view gain.** With
   UMIFormer+: random 0, heuristic +0.0082, policy +0.0109. Policy - heuristic
   is significant only with a router (+0.0041 [+0.0008, +0.0071] corrected;
   +0.0040 plain); with fixed backbones +0.0007 to +0.0027, intervals span 0.
 * **Corrected - plain router**: +0.0035 [+0.0015, +0.0057] on random views;
   +0.0027/+0.0028 with lower bound 0.0000 on heuristic/policy views.
-* **CPU-measured, the controller does not pay for itself.** ResNet features
-  cost ~0.4 s per object (5 x 95 ms on this run), worth ~0.03 utility -- more
-  than the routing gain. Every router/policy pipeline is negative; the best
-  are the controller-free Pix2Vox-F pipelines, because measured CPU backbone
-  times (Pix2Vox-F 0.68 s, UMIFormer+ 2.12 s) make UMIFormer+ far dearer than
-  cost v1 declares (gap 1.45 s measured vs 0.77 s declared).
-* **CPU timing is not stable**: this benchmark ran ~1.3x slower than earlier
-  ones on the same machine (ResNet 95 vs 63 ms). Measured utility differences
-  scale with the slowdown. At the earlier timings the Pix2Vox-F/UMIFormer+
-  trade-off is close to break-even (IoU gap 0.093 vs 1.19 s x 0.0771 = 0.092),
-  so the measured-utility ranking of those two is hardware-state dependent;
-  the controller-overhead conclusion is not (~0.3-0.4 s at any observed speed).
-* The cost estimate matches the cohort's measured end-to-end totals within
-  3.3% (15 pipelines); policy and heuristic reproduced every frozen episode on
-  CPU and GPU.
-* **Lambda**: with decisions frozen, routing gains grow with lambda (the
-  router picks Pix2Vox-F more). Rebuilt per lambda (adaptive), the router adds
-  ~nothing over policy + UMIFormer+ at lambda 0-0.04 (+0.011 both): its value
-  is the cost trade-off, not quality routing. The training-best single
+* **CPU-measured: under this CPU timing profile, the frozen system has
+  negative estimated utility relative to the baseline** (-0.0067 [-0.0120,
+  -0.0015]). ResNet features cost ~0.4 s per object (5 x 95 ms on this run),
+  ~0.03 utility. This is a statement about the frozen, cost-v1-trained system
+  on this profile; it does not show that a router optimised for measured CPU
+  costs would fail (the adaptive lambda study still uses cost-v1 prices).
+  Measured CPU backbone times (Pix2Vox-F 0.68 s, UMIFormer+ 2.12 s) also make
+  UMIFormer+ far dearer than cost v1 declares (gap 1.45 s vs 0.77 s).
+* **That conclusion is conditional on the timing model and machine state**
+  (`cpu_timing_sensitivity` in eval_dev.json):
+
+  | CPU contrast | components, k=1 | measured pipeline totals | k=0.75 | k=1.25 |
+  |---|---|---|---|---|
+  | full system - baseline | -0.0067 [-0.0120, -0.0015] | -0.0019 [-0.0204, +0.0187] | -0.0039 [-0.0082, +0.0004] | -0.0096 [-0.0157, -0.0035] |
+  | heuristic + pix2vox_f - baseline | +0.0219 | +0.0270 [+0.0123, +0.0426] | -0.0060 [-0.0187, +0.0073] | +0.0497 |
+  | heuristic + umiformer_plus - full system | +0.0149 | +0.0166 [-0.0044, +0.0361] | +0.0121 [+0.0075, +0.0167] | +0.0178 |
+
+  k scales every CPU timing (earlier sessions on this machine ran ~0.77x this
+  one's). The component estimate is within 3.3% of the cohort's measured
+  totals per pipeline, but that error matters here: for the full system vs
+  baseline it is 0.048 s, i.e. 0.0037 utility, more than the interval's
+  distance from zero. Measured totals are themselves noisy (two identical-
+  compute UMIFormer+ pipelines differ by 0.08 s). Only "a controller-free
+  UMIFormer+ pipeline beats the full system on CPU" holds at both machine
+  speeds, and not significantly under measured totals.
+* Policy and heuristic reproduced every frozen episode on CPU and GPU.
+* **Lambda**: with decisions frozen, the routers' selections do not change;
+  their cost savings simply weigh more as lambda grows. Rebuilt per lambda
+  (adaptive, cost-v1 prices), the corrected router shows little observed
+  additional quality benefit at lambda 0 (+0.0003 IoU over policy +
+  UMIFormer+); its value is the cost trade-off. The training-best single
   backbone flips to Pix2Vox-F at lambda >= 0.15.
+* **STOP is skipped for scope, not because it cannot help**: at 95 ms per
+  ResNet call, three acquired views instead of five would save ~0.19 s
+  (~0.015 utility) before any quality loss -- enough to matter against the CPU
+  result. Variable-budget acquisition remains untested and outside this
+  fixed-budget study.
 
 **Checkpoint selection** (`score_routed.py`, refinement 5): with the router,
 every checkpoint's dev view sets score within noise (routed 0.6832-0.6843);
