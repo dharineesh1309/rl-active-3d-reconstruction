@@ -1,3 +1,8 @@
+> **Note.** This document describes the backbone integration and the earlier
+> RGB-D pipeline (`train.py`, `view_policy.py`, `view_recon_env.py`). The
+> current system, its evaluation and the benchmark are described in the
+> top-level [README](../../README.md) and [BENCHMARK](../../BENCHMARK.md).
+
 # Joint RL for Next-Best-View and Reconstructor Selection
 
 A PPO agent that, for one object, picks **which viewpoints to look from** and then
