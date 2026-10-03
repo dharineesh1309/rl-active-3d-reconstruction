@@ -139,11 +139,11 @@ What it checks:
 
    | event | commit | time |
    |---|---|---|
-   | pre-registration | `c03de9a` | 2026-10-03 00:23 +0530 |
-   | amendment 1 | `1385ea0` | 2026-10-03 00:32 +0530 |
-   | final collection (views + completion marker) | `e98244a` | 2026-10-03 07:40 +0530 |
-   | pre-registered results | `053e390` | 2026-10-03 07:41 +0530 |
-   | post hoc benchmark | `42bad82` | 2026-10-03 08:39 +0530 |
+   | pre-registration | `28a4ef1` | 2026-10-03 00:23 +0530 |
+   | amendment 1 | `2e2ba91` | 2026-10-03 00:32 +0530 |
+   | final collection (views + completion marker) | `0a4d83a` | 2026-10-03 07:40 +0530 |
+   | pre-registered results | `53fbbb7` | 2026-10-03 07:41 +0530 |
+   | post hoc benchmark | `3b97a3a` | 2026-10-03 08:39 +0530 |
 
 3. **Recomputation**: the archive matches its `SHA256SUMS`; its features are
    the ones the completion marker binds and its policy is the registered one;
