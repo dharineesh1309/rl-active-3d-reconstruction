@@ -69,7 +69,7 @@ intervals.
 * **Against each standard reconstructor, the full system has higher
   cost-aware utility**, and **higher IoU than Pix2Vox-F and UMIFormer**.
   Against UMIFormer+ the IoU difference is not detectable: the gain there is
-  cost, from routing about 21% of objects to the cheaper Pix2Vox-F.
+  cost, from routing about 21% of reconstructions to the cheaper Pix2Vox-F.
 
 ### What they do not support
 
