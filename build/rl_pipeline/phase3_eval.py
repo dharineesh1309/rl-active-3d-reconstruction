@@ -169,6 +169,9 @@ def main():
                     help="dev writes the per-lambda routers here; final_test only reads them")
     ap.add_argument("--prereg", default="artifacts/final/preregistration.json",
                     help="final_test: enforced, with its dated amendments")
+    ap.add_argument("--posthoc-pairs", nargs="*", default=[],
+                    help="extra paired contrasts 'a|b' (e.g. 'policy+router_corrected|"
+                         "random+pix2vox_f'), reported as post hoc -- not pre-registered")
     ap.add_argument("--router", default="artifacts/router/router.npz")
     ap.add_argument("--latency-cpu", default="artifacts/phase3/latency_cpu.json")
     ap.add_argument("--latency-gpu", default="artifacts/phase3/latency_gpu.json")
@@ -382,6 +385,21 @@ def main():
         print(f"  {k:<64}" + "{0:+.4f} [{1:+.4f}, {2:+.4f}]   ".format(*con[k]["v1"])
               + "{0:+.4f} [{1:+.4f}, {2:+.4f}]".format(*con[k]["cpu_est"]))
     report["contrasts"] = con
+
+    if args.posthoc_pairs:
+        post = {"note": "post hoc: requested after the final evaluation; not "
+                        "pre-registered. Same objects, bootstrap and pairing."}
+        print(f"\npost hoc contrasts (NOT pre-registered)  {'':<26}{'IoU':<30}"
+              f"{'v1 utility':<30}CPU utility (est.)")
+        for pair in args.posthoc_pairs:
+            a, b = (tuple(x.split("+", 1)) for x in pair.split("|"))
+            x = P[a]["iou"] - P[b]["iou"]
+            post[pair] = {"iou": interval(wmean(W, x), x.mean()),
+                          "v1": contrast_v1(a, b), "cpu_est": contrast_cpu(a, b)}
+            print(f"  {pair.replace('|', ' - '):<64}"
+                  + "".join("{0:+.4f} [{1:+.4f}, {2:+.4f}]   ".format(*post[pair][m])
+                            for m in ("iou", "v1", "cpu_est")))
+        report["posthoc"] = post
 
     # ── the estimate against the cohort's measured end-to-end totals ──
     chk = {}
