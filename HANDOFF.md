@@ -593,7 +593,7 @@ coupling hypothesis was tested and came back at +0.0010).
 * **`.gitignore`: never leave `env/` unanchored.** It matched
   `build/rl_pipeline/env/` and silently excluded the whole environment package.
   The `baseline` commit claimed to preserve the RGB-D work and did not; those
-  files entered history at `dc4758b`, not `a08378f`.
+  files entered history at `e1ded85`, not `7a29ef9`.
 * **Kaggle nests datasets**: `ShapeNetRendering/ShapeNetRendering/<synset>`.
   `validate_cameras._resolve_root` handles it; a helper that stops at the first
   name match finds only the shell.
