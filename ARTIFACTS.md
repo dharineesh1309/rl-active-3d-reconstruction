@@ -12,8 +12,8 @@ and its amendment, the frozen views and completion marker, the router, the
 frozen adaptive routers, both latency profiles, and the split manifest. Their
 registered hashes reproduce from a fresh clone (checked 2026-10-03).
 
-Note on history: commit `e98244a` holds the final collection's views and
-completion marker, committed before the results commit `053e390`. The
+Note on history: commit `0a4d83a` holds the final collection's views and
+completion marker, committed before the results commit `53fbbb7`. The
 features, policy and cache it refers to are not in git; the marker binds the
 features by hash, and the evaluator verified it.
 
