@@ -3,7 +3,7 @@
 Written for whoever picks this up next, with no memory of the work.
 Everything below is measured unless marked otherwise.
 
-Repo: `D:\rl_project`, git initialised.
+Repo root: this directory (git).
 Working branch: **`tier0-rgb-pose-policy`**. `master` holds the pre-rebuild
 baseline.
 Code: `build/rl_pipeline/`.
