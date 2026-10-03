@@ -58,8 +58,11 @@ backbone-only utility (cost v1): **+0.0148 [+0.0093, +0.0200]. Supported.**
 * Heuristic vs random: positive for every non-Pix2Vox choice (UMIFormer+
   +0.0130 [+0.0101, +0.0161]; routers +0.012). Spreading the views is where
   the view-selection gain comes from.
-* The correction's dev quality advantage did not replicate; it still saves CPU
-  time by picking Pix2Vox-F more often.
+* The correction's **cost-v1 utility improvement** did not replicate. (It never
+  improved quality: on policy views it lowered mean IoU vs the plain router on
+  both dev, 0.7699 vs 0.7732, and final, 0.7769 vs 0.7840 -- its gain was in
+  picking the cheaper backbone.) Its final CPU-utility gain on policy views is
+  also uncertain: +0.0034 [-0.0012, +0.0077], despite lower estimated runtime.
 * Highest cost-v1 means among deployable pipelines: heuristic + corrected
   router +0.0165, policy + plain +0.0163, heuristic + plain +0.0158, policy +
   corrected +0.0148 -- all within each other's noise.
@@ -71,13 +74,19 @@ backbone-only utility (cost v1): **+0.0148 [+0.0093, +0.0200]. Supported.**
 * Lambda (adaptive, cost-v1 prices): at lambda 0-0.04 routing adds ~0.001
   over policy + UMIFormer+; its value is the cost trade-off.
 
-**Honest summary for the report**: the joint system beats random views with a
-fixed best backbone, as pre-registered. But a controller-free baseline --
-farthest-angle views + always UMIFormer+ -- is statistically indistinguishable
-on backbone-only utility and clearly better once controller CPU time is
-priced. The learned view policy's dev edge over that heuristic did not
-replicate on unseen objects; routing helps mainly by trading quality for
-cost.
+**Report conclusion** (wording agreed in review): the pre-registered system
+improved backbone-only utility over random views with fixed UMIFormer+. Its
+learned view-selection advantage over farthest-angle selection was not
+reproduced on the final test. The farthest-angle + UMIFormer+ baseline showed
+no statistically detectable difference in backbone-only (cost-v1) utility --
+which is not equivalence; the interval, full system minus baseline +0.0017
+[-0.0041, +0.0069], admits meaningful differences either way -- and higher
+estimated CPU-adjusted utility across all examined timing variants. These CPU
+conclusions remain conditional on the measured profiles.
+
+Utility is not reconstruction quality: mean IoU is 0.7878 for farthest-angle
++ UMIFormer+ against 0.7769 for the full system, which gives up some IoU by
+routing to the cheaper backbone.
 
 **Protocol** (`build/rl_pipeline/configs/splits_v1.json`, built by `splits.py`,
 refuses to overwrite). The official split only says what the reconstructors
