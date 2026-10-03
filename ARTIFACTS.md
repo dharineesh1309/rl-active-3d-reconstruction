@@ -27,7 +27,7 @@ features by hash, and the evaluator verified it.
 | `artifacts/tier1/set_pose_s62464.pt` | 9.5 MB | `7e7bf8db9b1f992ffb874cbf58c65784c3173ca1d85a67b4081c2997f38487fa` | Phase 1 kept checkpoint | Phase 1 notebook <user>/rlproj output |
 | `artifacts/tier1/set_pose_s123904.pt` | 9.5 MB | `9aedcb220da7e85820159847822d091d7eecc7c9c902df51438d135c42865726` | Phase 1 kept checkpoint | Phase 1 notebook <user>/rlproj output |
 | `artifacts/tier1/set_pose.pt` | 9.5 MB | `e28607ba74cc30441b0854d2859b0abc5d47a1882e534509a287951811136470` | Phase 1 final checkpoint (s200704) | Phase 1 notebook <user>/rlproj output |
-| `artifacts/tier0b/set_pose.pt` | 9.5 MB | `18778868a95ccca8f1a9bd794fe237ba995ca3e209e142d396f6f36cbc880366` | Tier 0B policy (official-train) | Kaggle dataset rl-tier0b-outputs; also in <user>/inputsfinal-era tier1 inputs |
+| `artifacts/tier0b/set_pose.pt` | 9.5 MB | `18778868a95ccca8f1a9bd794fe237ba995ca3e209e142d396f6f36cbc880366` | Tier 0B policy (official-train) | Kaggle dataset rl-tier0b-outputs; also in dataset tier1input |
 | `artifacts/tier0b/set_index.pt` | 9.3 MB | `1a04a2eb61683b887d2fe72bed0f6cbc4897823fdf6aa5016aa01fbaebf08ebd` | Tier 0B index-head ablation | Kaggle dataset rl-tier0b-outputs |
 | `artifacts/tier0b/mean_pose.pt` | 3.2 MB | `1e9fea83d0d462578535f273b8cc0206496444190ca2f5f4e141133bd3738c55` | Tier 0B mean-pool ablation | Kaggle dataset rl-tier0b-outputs |
 | `cache/utility_cache_legacy.json` | 8.7 MB | `93fbf8ba3bb72887d73fa43dea3c14f790b97fedee9936cfb222f3208fb49aa3` | original Tier 0B cache, pre-conversion | local only (the Tier 0B cache before conversion); also inside rl-tier0b-outputs |
