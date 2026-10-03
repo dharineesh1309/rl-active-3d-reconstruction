@@ -37,7 +37,8 @@ POSTHOC = ["policy+router_corrected|random+pix2vox_f",
            "policy+router_corrected|random+umiformer_plus",
            "policy+router_plain|random+pix2vox_f",
            "policy+router_plain|random+umiformer",
-           "policy+router_plain|random+umiformer_plus"]
+           "policy+router_plain|random+umiformer_plus",
+           "policy+router_corrected|heuristic+umiformer_plus"]
 
 failures = []
 
