@@ -12,7 +12,7 @@ however you like.
 | code | `python build/package_for_kaggle.py` -> `build/kaggle_code.zip` | `rl_pipeline/` with a `BUILD.txt` stamp (the git commit) |
 | weights | same script -> `build/kaggle_weights.zip` | `Pix2Vox-F-ShapeNet.pth`, `UMIFormer-ShapeNet.pth`, `UMIFormerPlus-ShapeNet.pth` |
 | voxels | same script -> `build/kaggle_voxels.zip` | `ShapeNetVox32/` |
-| renderings | public dataset `ShapeNet-Pix2Vox` | `ShapeNetRendering/` (24 views per object) |
+| renderings | public Kaggle dataset "ShapeNet-Pix2Vox" (12.9 GB) | `ShapeNetRendering/` (24 views per object) |
 | per-job inputs | the zips named below | checkpoints, cache, frozen view lists |
 
 Each cell starts with `EXPECT_BUILD`: the code dataset must carry that exact
