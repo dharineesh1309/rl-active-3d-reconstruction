@@ -31,7 +31,53 @@ router picks the backbone. STOP is an optional extension, gated on a pilot.
 | 2 | router from that run's cache; top up thin categories | **done**: `artifacts/router/router.npz`; no category thin (min 92) |
 | 3 | dev evaluation matrix + latency + lambda sensitivity (spec below) | **done**: `artifacts/phase3/eval_dev.json` (results below) |
 | 4 | STOP pilot (optional) | **skipped** for scope: variable-budget acquisition remains untested |
-| 5 | freeze, run `final_test` once, rewrite report | **pre-registered** (`artifacts/final/preregistration.json`, unmodified, + dated `preregistration_amendment_1.json`, code build 698bc1c); collection job ready (`build/kaggle_final_cell.py`); the evaluator refuses unless every registered hash and setting matches |
+| 5 | freeze, run `final_test` once, rewrite report | **final test done** (results below; `artifacts/final/eval_final.json`, evaluated once under the enforced registration). Report rewrite next |
+
+## FINAL TEST RESULTS (312 objects, evaluated once, 2026-10-03)
+
+Pre-registered (`artifacts/final/preregistration.json` + amendment 1); the
+evaluator verified every registered hash and setting before printing.
+
+**Primary**: policy + corrected router vs random + always-UMIFormer+,
+backbone-only utility (cost v1): **+0.0148 [+0.0093, +0.0200]. Supported.**
+
+**Secondary** (intervals reported, not confirmatory):
+
+| comparison | cost-v1 utility | CPU-estimated utility |
+|---|---|---|
+| full system - heuristic + umiformer_plus | +0.0017 [-0.0041, +0.0069] (no detectable difference) | -0.0232 [-0.0294, -0.0171] |
+| full system - heuristic + pix2vox_f | +0.0499 [+0.0378, +0.0624] | -0.0272 [-0.0424, -0.0125] |
+| corrected - plain router, random views | +0.0004 [-0.0028, +0.0033] | +0.0057 [+0.0022, +0.0093] |
+| corrected - plain router, heuristic views | +0.0007 [-0.0029, +0.0041] | +0.0051 [+0.0013, +0.0095] |
+| corrected - plain router, policy views | -0.0015 [-0.0062, +0.0022] | +0.0034 [-0.0012, +0.0077] |
+
+**Exploratory**:
+* **Policy vs farthest-angle heuristic: no detectable difference** for any
+  backbone choice (corrected router -0.0018 [-0.0052, +0.0014]; fixed
+  backbones -0.0014 to -0.0002). The dev advantage (+0.0041) did not replicate.
+* Heuristic vs random: positive for every non-Pix2Vox choice (UMIFormer+
+  +0.0130 [+0.0101, +0.0161]; routers +0.012). Spreading the views is where
+  the view-selection gain comes from.
+* The correction's dev quality advantage did not replicate; it still saves CPU
+  time by picking Pix2Vox-F more often.
+* Highest cost-v1 means among deployable pipelines: heuristic + corrected
+  router +0.0165, policy + plain +0.0163, heuristic + plain +0.0158, policy +
+  corrected +0.0148 -- all within each other's noise.
+* CPU-estimated (dev timing profile): the full system is -0.0102 [-0.0162,
+  -0.0042] vs baseline; heuristic + umiformer_plus beats it under every timing
+  variant checked (pipeline totals +0.0240 [+0.0032, +0.0447]; k=0.75 +0.0201;
+  k=1.25 +0.0263). Pix2Vox-F pipelines lead the estimate but flip sign with
+  machine speed (heuristic + pix2vox_f at k=0.75: -0.0109 [-0.0240, +0.0024]).
+* Lambda (adaptive, cost-v1 prices): at lambda 0-0.04 routing adds ~0.001
+  over policy + UMIFormer+; its value is the cost trade-off.
+
+**Honest summary for the report**: the joint system beats random views with a
+fixed best backbone, as pre-registered. But a controller-free baseline --
+farthest-angle views + always UMIFormer+ -- is statistically indistinguishable
+on backbone-only utility and clearly better once controller CPU time is
+priced. The learned view policy's dev edge over that heuristic did not
+replicate on unseen objects; routing helps mainly by trading quality for
+cost.
 
 **Protocol** (`build/rl_pipeline/configs/splits_v1.json`, built by `splits.py`,
 refuses to overwrite). The official split only says what the reconstructors
