@@ -203,7 +203,7 @@ In order of preference:
 
 1. **Attach a public dataset.** An attached dataset lives in `/kaggle/input` and
    does not count against the 20 GB `/kaggle/working` quota, so this costs
-   nothing. the public "ShapeNet-Pix2Vox" dataset (12.9 GB) looks
+   nothing. The public "ShapeNet-Pix2Vox" dataset (12.9 GB) looks
    like the right tree — check it contains `ShapeNetRendering/<synset>/<model>/rendering/`.
 2. **Fetch inside Kaggle.** Run `kaggle_fetch_data.py` in its own notebook with
    Internet enabled, commit it, and attach that output to the training notebook:
