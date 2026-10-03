@@ -15,8 +15,10 @@ against ShapeNetVox32 binvox, reported as the best mean over thresholds
 
 ## 1. Starting point
 
-The project report claims a PPO agent doing next-best-view planning **and**
-reconstruction-backbone selection. The shipped code did only the first:
+The original project proposal ("the report" below; not included here -- the
+system as built is described in [PROJECT.md](PROJECT.md)) claims a PPO agent
+doing next-best-view planning **and** reconstruction-backbone selection. The
+shipped code did only the first:
 `policy/view_policy.py` stated *"The old model-selection head has been fully
 removed. There is exactly one reconstructor."* The report itself lists
 multi-backbone selection as future work.
