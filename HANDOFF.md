@@ -14,8 +14,8 @@ Code: `build/rl_pipeline/`.
 
 One agent that decides **which views to acquire** of an object and **which
 pretrained reconstructor** should turn them into a 3D shape, under a budget that
-prices both. The report claims this; the shipped code did only view selection,
-and listed multi-backbone selection as future work.
+prices both. The original proposal claimed this; the shipped code did only view
+selection, and listed multi-backbone selection as future work.
 
 ---
 
