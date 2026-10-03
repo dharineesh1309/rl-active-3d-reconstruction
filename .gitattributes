@@ -1,0 +1,3 @@
+# Hashed artifacts must check out byte-identical, or registered hashes stop matching.
+artifacts/** -text
+build/rl_pipeline/configs/*.json -text
