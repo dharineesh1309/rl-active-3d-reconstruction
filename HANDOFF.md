@@ -74,6 +74,25 @@ backbone-only utility (cost v1): **+0.0148 [+0.0093, +0.0200]. Supported.**
 * Lambda (adaptive, cost-v1 prices): at lambda 0-0.04 routing adds ~0.001
   over policy + UMIFormer+; its value is the cost trade-off.
 
+**Benchmark against the three reconstructors used normally** (post hoc,
+requested after the final evaluation; `artifacts/final/standard_benchmark.json`;
+same 312 objects, bootstrap and pairing; only the UMIFormer+ cost-v1 row is
+pre-registered). "Normally" = 5 random views, one fixed reconstructor, the
+Pix2Vox / UMIFormer evaluation protocol; 24 random view sets per object.
+
+| full system minus | IoU | cost-v1 utility | CPU-estimated utility |
+|---|---|---|---|
+| Pix2Vox-F | +0.0991 [+0.0865, +0.1118] | +0.0524 [+0.0407, +0.0642] | -0.0248 [-0.0395, -0.0101] |
+| UMIFormer | +0.0105 [+0.0024, +0.0177] | +0.0231 [+0.0155, +0.0300] | -0.0026 [-0.0103, +0.0050] |
+| UMIFormer+ | +0.0021 [-0.0040, +0.0074] | **+0.0148 [+0.0093, +0.0200]** (pre-registered) | -0.0102 [-0.0162, -0.0042] |
+
+Supported: better cost-aware utility than each standard reconstructor; better
+IoU than Pix2Vox-F and UMIFormer; IoU vs UMIFormer+ not detectably different.
+Not supported: any advantage once controller CPU time is charged (dev timing
+profile). The plain-router variant would show IoU +0.0091 [+0.0049, +0.0133]
+over UMIFormer+, but it is not the selected system; choosing it now would be
+selecting on the final test, so it is reported as exploratory only.
+
 **Report conclusion** (wording agreed in review): the pre-registered system
 improved backbone-only utility over random views with fixed UMIFormer+. Its
 learned view-selection advantage over farthest-angle selection was not
