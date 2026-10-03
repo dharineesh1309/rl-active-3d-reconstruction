@@ -14,7 +14,7 @@ Stanford is fast, so fetching them *there* takes minutes.
 
 Try a public dataset first, though. An attached dataset lives in /kaggle/input
 and does not consume the 20 GB /kaggle/working quota at all, so if
-the public "ShapeNet-Pix2Vox" dataset (12.9 GB) contains the
+the public "ShapeNet-Pix2Vox" Kaggle dataset (12.9 GB) contains the
 ShapeNetRendering tree, just attach it and skip this script entirely.
 
 The disk constraint
