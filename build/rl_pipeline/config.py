@@ -5,16 +5,19 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 
 class Config:
     # ── Dataset ───────────────────────────────────────────────────────────────
-    # Path to the dataset_preprocessed/ folder.
-    # Override via --dataset-root CLI arg or $DATASET_ROOT env var in train.py.
-    dataset_root = r"C:\Users\<user>\Desktop\ML\RL\ModelNet_out_2"
+    # Legacy ModelNet pipeline only: the dataset_preprocessed/ folder.
+    # Override via --dataset-root CLI arg or $DATASET_ROOT.
+    dataset_root = os.environ.get("DATASET_ROOT",
+                                  os.path.join(_HERE, "..", "dataset_preprocessed"))
     categories   = ["bed", "chair", "desk", "sofa", "table"]
 
     # ── Reconstructor ─────────────────────────────────────────────────────────
     # Path to the pretrained EncoderDecoder checkpoint (.pth file).
     # This model is loaded inside each environment worker (CPU) to score
     # reconstructions and compute the IoU reward.
-    reconstructor_ckpt = r"C:\Users\<user>\Desktop\ML\3D reconstruction\ep78_encoder_decoder_64_frz(iou0.4893_loss0.2232).pth"
+    # Legacy pipeline only. Override via $RECONSTRUCTOR_CKPT.
+    reconstructor_ckpt = os.environ.get("RECONSTRUCTOR_CKPT",
+                                        os.path.join(_HERE, "..", "reconstructor.pth"))
     feature_dim        = 512   # encoder output / decoder input dimension
     voxel_size         = 64    # reconstructor output grid: (64, 64, 64)
     recon_img_size     = 256   # input image size expected by the reconstructor
