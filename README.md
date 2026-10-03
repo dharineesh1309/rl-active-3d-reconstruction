@@ -9,6 +9,9 @@ It was evaluated once, on 312 held-out ShapeNet objects, under a
 pre-registered protocol with hash-enforced inputs. The benchmark below can be
 re-derived from this repository with one command.
 
+The whole idea -- problem, method, experiments, results and limitations -- is
+written up in **[PROJECT.md](PROJECT.md)**.
+
 ![Full system minus each alternative](docs/benchmark.png)
 
 ## Results
@@ -160,3 +163,7 @@ is untested); CPU-adjusted conclusions depend on one machine's timing profile;
 wrapper reproduces the architecture of
 [Pix2Vox](https://github.com/hzxie/Pix2Vox); their licenses apply to that
 code. ShapeNet is subject to its own terms of use.
+
+## License
+
+MIT, see [LICENSE](LICENSE).
