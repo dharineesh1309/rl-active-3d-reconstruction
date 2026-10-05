@@ -15,7 +15,7 @@ completion marker, committed before the results commit `53fbbb7`. The
 features, policy and cache it refers to are not in git; the marker binds the
 features by hash, and the evaluator verified it.
 
-| path | size | sha256 | role | retrieve from |
+| path | size | role | retrieve from |
 |---|---|---|---|---|
 | `artifacts/final/feats_final.npz` | 30.9 MB | final objects' ResNet features + poses (evaluation input; never a training input) | archive; output of the Kaggle notebook version that ran the final collection (2026-10-03) |
 | `cache/utility_cache.json` | 29.1 MB | utility cache, 121,376 view sets incl. every final-test reconstruction (evaluation input) | archive; same notebook version (its cache plus the local one, merged with merge_caches) |
